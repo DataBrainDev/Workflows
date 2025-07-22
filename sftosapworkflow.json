@@ -1,0 +1,178 @@
+{
+  "workflow": {
+    "name": "SAP B1 to Salesforce Integration",
+    "description": "Create Salesforce accounts from new SAP Business Partners and sync updates"
+  },
+  "nodes": [
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://dev-srv.databrain.local:50001/b1s/v2/Login",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUsername}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 1,
+      "retry": {
+        "enabled": true,
+        "maxAttempts": 3,
+        "delay": 1000
+      }
+    },
+    {
+      "id": "get_new_bps",
+      "name": "Get New Business Partners",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://localhost:50001/b1s/v1/view.svc/Vw_DB_GetBusinessPartnersB1SLQuery",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "create_sf_account",
+      "name": "Create Salesforce Account",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Account",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer {{config.sfAccessToken}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "SAP_Account_Number__c": "{{$node['get_new_bps'].CardCode}}",
+          "Name": "{{$node['get_new_bps'].CardName}}",
+          "LastName": "{{$node['get_new_bps'].LastName | defaultIfEmpty:'N/A'}}",
+          "Account_Classification_Group__c": "{{$node['get_new_bps'].GroupCode}}",
+          "Account_Balance__c": "{{$node['get_new_bps'].Balance | toNumber}}",
+          "PersonMobilePhone": "{{$node['get_new_bps'].Cellular}}",
+          "Phone1__c": "{{$node['get_new_bps'].Phone1}}",
+          "Phone2__c": "{{$node['get_new_bps'].Phone2}}",
+          "Mobile2__c": "{{$node['get_new_bps'].AdditionalCellular}}",
+          "PersonEmail": "{{$node['get_new_bps'].EmailAddress}}",
+          "Accounting_email__c": "{{$node['get_new_bps'].AccountingEmail}}",
+          "Customer_Status__c": "{{$node['get_new_bps'].Status}}",
+          "End_Date__c": "{{$node['get_new_bps'].EndDate}}",
+          "ID_Number__c": "{{$node['get_new_bps'].FederalTaxID}}",
+          "PersonMailingCity": "{{$node['get_new_bps'].BillToCity}}",
+          "PersonMailingCountry": "{{$node['get_new_bps'].BillToCountry | countryToAlpha3}}",
+          "PersonMailingPostalCode": "{{$node['get_new_bps'].BillToZip}}",
+          "PersonMailingState": "{{$node['get_new_bps'].BillToState}}",
+          "PersonMailingStreet": "{{$node['get_new_bps'].BillToStreet}}",
+          "ShippingCity": "{{$node['get_new_bps'].ShipToCity}}",
+          "ShippingCountry": "{{$node['get_new_bps'].ShipToCountry | countryToAlpha3}}",
+          "ShippingPostalCode": "{{$node['get_new_bps'].ShipToZip}}",
+          "ShippingState": "{{$node['get_new_bps'].ShipToState}}",
+          "ShippingStreet": "{{$node['get_new_bps'].ShipToStreet}}",
+          "Credit_Card_Type__c": "{{$node['get_new_bps'].CreditCardType | defaultIfEmpty:null}}",
+          "Expiration_Date__c": "{{$node['get_new_bps'].ExpirationDate | defaultIfEmpty:null}}",
+          "Customer_Type__c": "{{$node['get_new_bps'].CustomerType}}",
+          "Serial_Number__c": "{{$node['get_new_bps'].SerialNumber}}",
+          "Last_Invoice_Amount__c": "{{$node['get_new_bps'].LastInvoiceAmt | toNumber}}",
+          "Last_Invoice_Date__c": "{{$node['get_new_bps'].LastInvoiceDate}}",
+          "Payment_Terms__c": "{{$node['get_new_bps'].PayTermsCode}}",
+          "Salesperson__c": "{{$node['get_new_bps'].SalesPersonCode}}",
+          "Comments__c": "{{$node['get_new_bps'].Comments}}",
+          "Sync_to_SAP__c": "{{$node['get_new_bps'].SyncToSAP | toBoolean}}"
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "update_sap_sfid",
+      "name": "Update SAP with SF ID",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://localhost:50001/b1s/v1/BusinessPartners('{{$node['get_new_bps'].CardCode}}')",
+        "method": "PATCH",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        },
+        "body": {
+          "U_SFId": "{{$node['create_sf_account'].Id}}"
+        }
+      },
+      "position": 4
+    },
+    {
+      "id": "get_updated_bp",
+      "name": "Get Updated Business Partner",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://localhost:50001/b1s/v1/view.svc/Vw_DB_GetBusinessPartnerUpdateB1SLQuery?CardCode='{{$node['get_new_bps'].CardCode}}'",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "update_sf_account",
+      "name": "Update Salesforce Account",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Account/{{$node['create_sf_account'].Id}}",
+        "method": "PATCH",
+        "headers": {
+          "Authorization": "Bearer {{config.sfAccessToken}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "SAP_Account_Number__c": "{{$node['get_updated_bp'].CardCode}}",
+          "Name": "{{$node['get_updated_bp'].CardName}}",
+          "Account_Balance__c": "{{$node['get_updated_bp'].Balance | toNumber}}",
+          "Last_Invoice_Amount__c": "{{$node['get_updated_bp'].LastInvoiceAmt | toNumber}}",
+          "Last_Invoice_Date__c": "{{$node['get_updated_bp'].LastInvoiceDate}}",
+          "Payment_Terms__c": "{{$node['get_updated_bp'].PayTermsCode}}",
+          "Sync_to_SAP__c": true
+        }
+      },
+      "position": 6
+    },
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://dev-srv.databrain.local:50001/b1s/v2/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 7
+    }
+  ],
+  "connections": [
+    {"from": "sap_login", "to": "get_new_bps"},
+    {"from": "get_new_bps", "to": "create_sf_account"},
+    {"from": "create_sf_account", "to": "update_sap_sfid"},
+    {"from": "update_sap_sfid", "to": "get_updated_bp"},
+    {"from": "get_updated_bp", "to": "update_sf_account"},
+    {"from": "update_sf_account", "to": "sap_logout"}
+  ],
+  "config": {
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUsername": "bhadresh",
+    "sapPassword": "1234",
+    "sfInstanceUrl": "https://telran--integratio.sandbox.my.salesforce.com",
+    "sfAccessToken": "00Ddv0000023CbN!AQEAQP4vRnncbr6S4A4xPShZeikAgFpCItTunaTtK0T0.qa.Uay2NfDa7aCyXmuKPCYvivV1R3mus7fDXQmz2s4oNZ2.QvFs"
+  }
+}

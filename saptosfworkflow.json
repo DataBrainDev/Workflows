@@ -1,0 +1,216 @@
+{
+    "workflow": {
+        "name": "Salesforce to SAP B1 Integration",
+        "description": "Sync Salesforce account updates to SAP Business One"
+    },
+    "nodes": [
+        {
+            "id": "sf_account_fetch",
+            "name": "Fetch Salesforce Account details from trigger",
+            "type": "trigger"
+        },
+        {
+            "id": "sap_login",
+            "name": "SAP B1 Login",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "http://localhost:50001/b1s/v1/Login",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": {
+                    "CompanyDB": "SBODEOIL4",
+                    "UserName": "bhadresh",
+                    "Password": "1234"
+                }
+            },
+            "position": 2,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1000
+            }
+        },
+        {
+            "id": "check_bp_exists",
+            "name": "Check Business Partner Exists",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "http://localhost:50001/b1s/v1/SQLQueries('DB_CheckCardexist')/List?sfid='{{$node['sf_account_fetch'].Id}}'",
+                "method": "GET",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                }
+            }
+        },
+        {
+            "id": "bp_exists_check",
+            "name": "Business Partner Exists?",
+            "type": "if",
+            "parameters": {
+                "conditions": {
+                    "number": [
+                        {
+                            "value1": "{{$node['check_bp_exists'].rowCount}}",
+                            "operation": "greater",
+                            "value2": 0
+                        }
+                    ]
+                }
+            },
+            "position": 4,
+            "retry": {
+                "enabled": false
+            }
+        },
+        {
+            "id": "update_bp",
+            "name": "Update Business Partner",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "http://localhost:50001/b1s/v1/BusinessPartners('{{$node['check_bp_exists'].CardCode}}')",
+                "method": "PATCH",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                },
+                "body": {
+                    "CardName": "{{$node['sf_account_fetch'].Name | truncate:40}}",
+                    "Phone1": "{{$node['sf_account_fetch'].Phone1__c | truncate:20}}",
+                    "EmailAddress": "{{$node['sf_account_fetch'].Email__c | truncate:100}}",
+                    "BPAddresses": [
+                        {
+                            "AddressName": "Billing Address",
+                            "AddressType": "bo_BillTo",
+                            "Street": "{{$node['sf_account_fetch'].PersonMailingStreet | truncate:100}}",
+                            "City": "{{$node['sf_account_fetch'].PersonMailingCity | truncate:50}}",
+                            "ZipCode": "{{$node['sf_account_fetch'].PersonMailingPostalCode | truncate:20}}",
+                            "Country": "{{$node['sf_account_fetch'].PersonMailingCountry | countryToAlpha3}}",
+                            "RowNum": 0,
+                            "BPCode": "{{$node['check_bp_exists'].CardCode}}"
+                        },
+                        {
+                            "AddressName": "Shipping Address",
+                            "AddressType": "bo_ShipTo",
+                            "Street": "{{$node['sf_account_fetch'].ShippingStreet | truncate:100}}",
+                            "City": "{{$node['sf_account_fetch'].ShippingCity | truncate:50}}",
+                            "ZipCode": "{{$node['sf_account_fetch'].ShippingPostalCode | truncate:20}}",
+                            "Country": "{{$node['sf_account_fetch'].ShippingCountry | countryToAlpha3}}",
+                            "RowNum": 1,
+                            "BPCode": "{{$node['check_bp_exists'].CardCode}}"
+                        }
+                    ]
+                }
+            },
+            "position": 5,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1000
+            }
+        },
+        {
+            "id": "create_bp",
+            "name": "Create Business Partner",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "http://localhost:50001/b1s/v1/BusinessPartners",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                },
+                "body": {
+                    "Series": "{{config.bpSeries}}",
+                    "CardName": "{{$node['sf_account_fetch'].Name | truncate:40}}",
+                    "CardType": "cCustomer",
+                    "FederalTaxID": "{{$node['sf_account_fetch'].ID_Number__c | truncate:50}}",
+                    "EmailAddress": "{{$node['sf_account_fetch'].Email__c | truncate:100}}",
+                    "Phone1": "{{$node['sf_account_fetch'].Phone1__c | truncate:20}}",
+                    "U_SFId": "{{$node['sf_account_fetch'].Id}}",
+                    "BPAddresses": [
+                        {
+                            "AddressName": "Billing Address",
+                            "AddressType": "bo_BillTo",
+                            "Street": "{{$node['sf_account_fetch'].PersonMailingStreet | truncate:100}}",
+                            "City": "{{$node['sf_account_fetch'].PersonMailingCity | truncate:50}}",
+                            "ZipCode": "{{$node['sf_account_fetch'].PersonMailingPostalCode | truncate:20}}",
+                            "Country": "{{$node['sf_account_fetch'].PersonMailingCountry | countryToAlpha3}}"
+                        },
+                        {
+                            "AddressName": "Shipping Address",
+                            "AddressType": "bo_ShipTo",
+                            "Street": "{{$node['sf_account_fetch'].ShippingStreet | truncate:100}}",
+                            "City": "{{$node['sf_account_fetch'].ShippingCity | truncate:50}}",
+                            "ZipCode": "{{$node['sf_account_fetch'].ShippingPostalCode | truncate:20}}",
+                            "Country": "{{$node['sf_account_fetch'].ShippingCountry | countryToAlpha3}}"
+                        }
+                    ]
+                }
+            },
+            "position": 5,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1000
+            }
+        },
+        {
+            "id": "sap_logout",
+            "name": "SAP B1 Logout",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "http://localhost:50001/b1s/v1/Logout",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                }
+            },
+            "position": 6,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 2,
+                "delay": 500
+            }
+        }
+    ],
+    "connections": [
+        {
+            "from": "sf_account_fetch",
+            "to": "sap_login"
+        },
+        {
+            "from": "sap_login",
+            "to": "check_bp_exists"
+        },
+        {
+            "from": "check_bp_exists",
+            "to": "bp_exists_check"
+        },
+        {
+            "from": "bp_exists_check",
+            "to": "update_bp",
+            "branch": "true"
+        },
+        {
+            "from": "bp_exists_check",
+            "to": "create_bp",
+            "branch": "false"
+        },
+        {
+            "from": "update_bp",
+            "to": "sap_logout"
+        },
+        {
+            "from": "create_bp",
+            "to": "sap_logout"
+        }
+    ],
+    "config": {
+        "sqlConnectionString": "server=DEV-SRV;user id=sa;password=B1Admin;database=SBODEOIL4",
+        "bpSeries": "110"
+    }
+}
