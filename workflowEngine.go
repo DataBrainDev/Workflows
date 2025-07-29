@@ -102,78 +102,6 @@ func (we *WorkflowEngine) getStartNode() *Node {
 	return nil
 }
 
-// func (we *WorkflowEngine) Execute() error {
-// 	log.Printf("Starting workflow: %s", we.workflow.Workflow.Name)
-
-// 	executionOrder, err := we.buildExecutionOrder()
-// 	if err != nil {
-// 		return fmt.Errorf("failed to build execution order: %w", err)
-// 	}
-
-// 	for _, nodeID := range executionOrder {
-// 		node := we.getNodeByID(nodeID)
-// 		if node == nil {
-// 			return fmt.Errorf("node not found: %s", nodeID)
-// 		}
-
-// 		log.Printf("Executing node: %s (%s)", node.Name, node.ID)
-
-// 		if err := we.executeNode(node); err != nil {
-// 			return fmt.Errorf("failed to execute node %s: %w", node.ID, err)
-// 		}
-// 	}
-
-// 	log.Printf("Workflow completed successfully: %s", we.workflow.Workflow.Name)
-// 	return nil
-// }
-
-func (we *WorkflowEngine) buildExecutionOrder() ([]string, error) {
-	var order []string
-	visited := make(map[string]bool)
-
-	var startNode *Node
-	for _, node := range we.workflow.Nodes {
-		if node.Position == 1 {
-			startNode = &node
-			break
-		}
-	}
-
-	if startNode == nil {
-		return nil, fmt.Errorf("no starting node found")
-	}
-
-	we.dfsOrder(startNode.ID, visited, &order)
-	return order, nil
-}
-
-func (we *WorkflowEngine) dfsOrder(nodeID string, visited map[string]bool, order *[]string) {
-	if visited[nodeID] {
-		return
-	}
-
-	visited[nodeID] = true
-	*order = append(*order, nodeID)
-
-	for _, conn := range we.workflow.Connections {
-		if conn.From == nodeID {
-			if conn.Branch != "" {
-				fromNode := we.getNodeByID(conn.From)
-				if fromNode != nil && fromNode.Type == "if" {
-					conditionResult := we.evaluateCondition(fromNode)
-					shouldExecute := (conn.Branch == "true" && conditionResult) ||
-						(conn.Branch == "false" && !conditionResult)
-					if shouldExecute {
-						we.dfsOrder(conn.To, visited, order)
-					}
-				}
-			} else {
-				we.dfsOrder(conn.To, visited, order)
-			}
-		}
-	}
-}
-
 func (we *WorkflowEngine) executeNode(node *Node) error {
 	var err error
 	maxAttempts := 1
@@ -677,12 +605,3 @@ func (we *WorkflowEngine) getNodeByID(id string) *Node {
 	}
 	return nil
 }
-
-// func (we *WorkflowEngine) getNodeByID(id string) *Node {
-// 	for _, node := range we.workflow.Nodes {
-// 		if node.ID == id {
-// 			return &node
-// 		}
-// 	}
-// 	return nil
-// }
