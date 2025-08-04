@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,6 +22,21 @@ func main() {
 
 	// Create Gin router
 	router := gin.Default()
+	trustedProxies := os.Getenv("TRUSTED_PROXIES")
+	if trustedProxies == "" {
+		// Default to common private network CIDRs
+		trustedProxies = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+	}
+	router.SetTrustedProxies(strings.Split(trustedProxies, ","))
+
+	// 2. Add Proxy-Aware Middleware
+	router.Use(func(c *gin.Context) {
+		// Ensure X-Forwarded-* headers are respected
+		if clientIP := c.ClientIP(); clientIP != "" {
+			c.Request.RemoteAddr = clientIP
+		}
+		c.Next()
+	})
 
 	// Add middleware
 	router.Use(gin.Logger())
