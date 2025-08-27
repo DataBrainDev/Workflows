@@ -1,0 +1,187 @@
+{
+  "workflow": {
+    "name": "SAP Invoice to Salesforce",
+    "description": "Sync SAP Invoice to Salesforce with create or update"
+  },
+  "nodes": [
+    {
+      "id": "sf_access_token_fetch",
+      "name": "Fetch Salesforce Access Token",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/oauth2/token",
+        "method": "POST", 
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        "body": {
+          "grant_type": "{{config.sfGrantType}}",
+          "client_id": "{{config.sfClientId}}",
+          "client_secret": "{{config.sfClientSecret}}",
+          "username": "{{config.sfUsername}}",
+          "password": "{{config.sfPassword}}"
+        }
+      },
+      "position": 1,
+      "retry": {
+        "enabled": true,
+        "maxAttempts": 3,
+        "delay": 1000
+      }
+    },
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+                "CompanyDB": "{{config.sapCompanyDB}}",
+                "UserName": "{{config.sapUserName}}",
+                "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "sap_fetch_invoice",
+      "name": "Fetch SAP Invoice",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Invoices(557)",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "sf_check_invoice",
+      "name": "Check if Invoice Exists in Salesforce",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/query?q=SELECT+Id+FROM+Invoice__c+WHERE+DocEntry__c={{$node['sap_fetch_invoice'].DocEntry}}",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 4
+    },
+    {
+      "id": "invoice_exists_check",
+      "name": "Invoice Exists?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$node['sf_check_invoice'].totalSize}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "sf_update_invoice",
+      "name": "Update Invoice__c in Salesforce",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Invoice__c/{{$node['sf_check_invoice'].records[0].Id}}",
+        "method": "PATCH",
+        "headers": {
+         "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+
+          "Status__c": "{{$node['sap_fetch_invoice'].DocStatus}}",
+          "Value_Date__c": "{{$node['sap_fetch_invoice'].AssetValueDate}}",
+          "Transaction_Date__c": "{{$node['sap_fetch_invoice'].TaxDate}}",
+          "Total_Transaction_Including_VAT__c": "{{$node['sap_fetch_invoice'].DocTotal}}",
+          "Doc_Date__c": "{{$node['sap_fetch_invoice'].DocDate}}",
+          "Doc_Due_Date__c": "{{$node['sap_fetch_invoice'].DocDueDate}}",
+          "Card_Name__c": "{{$node['sap_fetch_invoice'].CardName}}"
+        }
+      },
+      "position": 6
+    },
+    {
+      "id": "sf_create_invoice",
+      "name": "Create Invoice__c in Salesforce",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Invoice__c",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "SAP_Number__c": "{{$node['sap_fetch_invoice'].CardCode}}",
+          
+          "Status__c": "{{$node['sap_fetch_invoice'].DocStatus}}",
+          "Series_Number__c":"{{$node['sap_fetch_invoice'].Series}}",
+          "Value_Date__c":"{{$node['sap_fetch_invoice'].AssetValueDate}}",
+          "Transaction_Date__c": "{{$node['sap_fetch_invoice'].TaxDate}}",
+          "Total_Transaction_Including_VAT__c": "{{$node['sap_fetch_invoice'].DocTotal}}",
+          "Invoice_Number__c":"{{$node['sap_fetch_invoice'].DocNum}}",
+          "DocEntry__c": "{{$node['sap_fetch_invoice'].DocEntry}}",
+          "Doc_Date__c": "{{$node['sap_fetch_invoice'].DocDate}}",
+          "Doc_Due_Date__c": "{{$node['sap_fetch_invoice'].DocDueDate}}",
+          "Card_Code__c": "{{$node['sap_fetch_invoice'].CardCode}}",
+          "Card_Name__c": "{{$node['sap_fetch_invoice'].CardName}}"
+        }
+      },
+      "position": 7
+    },
+    
+    {
+      "id": "sap_logout",
+      "name": "SAP Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 8
+    }
+  ],
+  "connections": [
+{ "from": "sf_access_token_fetch", "to": "sap_login" },
+{ "from": "sap_login", "to": "sap_fetch_invoice" },
+{ "from": "sap_fetch_invoice", "to": "sf_check_invoice" },
+{ "from": "sf_check_invoice", "to": "invoice_exists_check" },
+{ "from": "invoice_exists_check", "to": "sf_update_invoice", "branch": "true" },
+{ "from": "invoice_exists_check", "to": "sf_create_invoice", "branch": "false" },
+{ "from": "sf_update_invoice", "to": "sap_logout" },
+{ "from": "sf_create_invoice", "to": "sap_logout" }
+],
+  "config": {
+    "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+    "sapBaseUrl": "http://localhost:50001/b1s/v1",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234",
+    "sfInstanceUrl": "https://telran--integratio.sandbox.my.salesforce.com",
+    "sfClientId": "3MVG9395hRoMgFO1MelEIT9Qwm2YK.UQcNyrHIkZg9oAvQiCelatcQUUVJwdQxb7jr1MqCS2g_6R78XhFl.gm",
+    "sfClientSecret": "5AEB0358C228FBFA93CE2D763C7C8CDF92FB6F5C609936A8E53B2E8C624D06B0",
+    "sfUsername": "yaniv-lnjy@force.com.integratio",
+    "sfPassword": "Aa123456!!QuIOQzGdVXPiGBetDi7PyNid",
+    "sfGrantType": "password"
+  }
+}

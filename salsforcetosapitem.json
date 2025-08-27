@@ -1,0 +1,151 @@
+{
+  "workflow": {
+    "name": "Salesforce to SAP Integration",
+    "description": "Sync Salesforce Product2 updates to SAP Item Master"
+  },
+  "nodes": [
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUserName}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 1
+    },
+    {
+      "id": "sf_fetch_product",
+      "name": "Fetch Salesforce Product",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Product2/{{config.resourceId}}",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer {{config.sfAccessToken}}",
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "sap_check_item",
+      "name": "Check SAP Item Exists",
+      "type": "httpRequest",
+      "parameters": {
+       "url": "http://localhost:50001/b1s/v1/SQLQueries('DB_CheckItemExist')/List?sfid='{{$node['sf_fetch_product'].Id}}'",
+        "method": "GET",                                                               
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "item_exists_check",
+      "name": "Item Exists?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$node['sap_check_item'].rowCount}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 4
+    },
+    {
+      "id": "sap_update_item",
+      "name": "Update SAP Item",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Items('{{$node['sf_fetch_product'].ProductCode}}')",
+        "method": "PATCH",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        },
+        "body": {
+          "ItemName": "{{$node['sf_fetch_product'].Name}}",
+          "ForeignName": "{{$node['sf_fetch_product'].Foreign_Name__c}}",
+          "ItemType": "{{$node['sf_fetch_product'].Items_Group_Code__c}}",
+          "Valid": "{{$node['sf_fetch_product'].Valid__c | toBoolean}}",
+          "SalesItem": "{{$node['sf_fetch_product'].Sale_Item__c | toBoolean}}",
+          "Type": "{{$node['sf_fetch_product'].Type__c}}",
+          "PurchaseItem": "{{$node['sf_fetch_product'].Purchase_Item__c | toBoolean}}"
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "sap_create_item",
+      "name": "Create SAP Item",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Items",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        },
+        "body": {
+          "ItemCode": "{{$node['sf_fetch_product'].ProductCode}}",
+          "ItemName": "{{$node['sf_fetch_product'].Name}}",
+          "ForeignName": "{{$node['sf_fetch_product'].Foreign_Name__c}}",
+          "ItemType": "{{$node['sf_fetch_product'].Items_Group_Code__c}}",
+          "Valid": "{{$node['sf_fetch_product'].Valid__c | toBoolean}}",
+          "SalesItem": "{{$node['sf_fetch_product'].Sale_Item__c | toBoolean}}",
+          "Type": "{{$node['sf_fetch_product'].Type__c}}",
+          "PurchaseItem": "{{$node['sf_fetch_product'].Purchase_Item__c | toBoolean}}"
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 6
+    }
+  ],
+  "connections": [
+    { "from": "sap_login", "to": "sf_fetch_product" },
+    { "from": "sf_fetch_product", "to": "sap_check_item" },
+    { "from": "sap_check_item", "to": "item_exists_check" },
+    { "from": "item_exists_check", "to": "sap_update_item", "branch": "true" },
+    { "from": "item_exists_check", "to": "sap_create_item", "branch": "false" },
+    { "from": "sap_update_item", "to": "sap_logout" },
+    { "from": "sap_create_item", "to": "sap_logout" }
+  ],
+  "config": {
+    "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+    "sapBaseUrl": "http://localhost:50001/b1s/v1",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234",
+    "sfInstanceUrl": "https://telran--integratio.sandbox.my.salesforce.com",
+    "sfAccessToken": "00Ddv0000023CbN!AQEAQNYk2AI3Ucy0zdQAVvoib6vKIamP5AJ.ewV6RCqeDVN3efCfVVkcgsUzMLK42UGo6Grn4fhgSeMohX13Jt.c.Iz19rJE",
+    "resourceId": "01tdv000003vrkEAAQ"
+  }
+}

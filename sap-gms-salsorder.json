@@ -1,0 +1,223 @@
+{
+  "workflow": {
+    "name": "SAP → GMS SalesOrder (Create/Update + Cancel Handling, POST only)",
+    "description": "Fetch SAP SO, POST to GMS (create when orderNum empty, update when present), write back orderNum after create, and send header-only if Cancelled != tNO."
+  },
+  "nodes": [
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": { "Content-Type": "application/json" },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUserName}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 1
+    },
+    {
+      "id": "sap_get_order",
+      "name": "Get SAP Sales Order",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Orders({{config.docEntry}})",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "decide_cancelled",
+      "name": "IF: Cancelled == tNO ?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "{{$node['sap_get_order'].json.Cancelled || $node['sap_get_order'].json.Canceled || $node['sap_get_order'].json.CANCELED || ''}}",
+              "operation": "equals",
+              "value2": "tNO"
+            }
+          ]
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "decide_create_or_update",
+      "name": "IF: Has GMS orderNum (U_ReturnNo)?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "{{$node['sap_get_order'].json.U_ReturnNo || ''}}",
+              "operation": "isEmpty"
+            }
+          ]
+        }
+      },
+      "position": 4
+    },
+
+    {
+      "id": "gms_create_post",
+      "name": "GMS CREATE (POST, orderNum empty)",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.gmsBaseUrl}}/orders/upload",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "listOfOrderDocuments": [
+            {
+             "rows": "{{$arrayMap($node['sap_get_order'].json.DocumentLines,{\"makat\":\"{{ItemCode}}\",\"supplyQty\":\"{{Quantity}}\",\"byWeight\":true,\"des\":\"{{ItemDescription}}\",\"stockID\":\"\",\"stockMovesID\":\"\",\"orderNum\":\"\",\"status\":\"\",\"plastonSupplyQty\":\"0\",\"plastonNewQty\":\"0\",\"newQty\":\"0\",\"teuda\":\"\",\"remarks\":\"{{FreeText}}\"},\"json\")}}",
+              "hed": {
+                "dueDate": "{{$node['sap_get_order'].json.DocDueDate|toDate}}",
+                "teuda": "{{$node['sap_get_order'].json.DocNum|concat}}",
+                "remarks": "{{$node['sap_get_order'].json.Comments}}",
+                "orderNum": "",
+                "accountName": "{{$node['sap_get_order'].json.CardName}}",
+                "accountKey": "{{$node['sap_get_order'].json.CardCode}}",
+                "createdDate": "{{$node['sap_get_order'].json.DocDate|toDate}}",
+                "status": "New"
+              }
+            }
+          ]
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "sap_update_orderNum",
+      "name": "PATCH SAP U_ReturnNo (after create)",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Orders({{config.docEntry}})",
+        "method": "PATCH",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "body": {
+          "U_ReturnNo": "{{$node['gms_create_post'].json.orderNum}}"
+        }
+      },
+      "position": 6
+    },
+
+    {
+      "id": "gms_update_post",
+      "name": "GMS UPDATE (POST, orderNum present)",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://199.203.140.245:44380/OrderPipeMidgeSapAPI/orders/upload",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        "body": {
+          "listOfOrderDocuments": [
+            {
+              "hed": {
+                "dueDate": "{{$node['sap_get_order'].json.DocDueDate|toDate}}",
+                "TEUDA": "{{$node['sap_get_order'].json.DocNum|concat}}",
+                "remarks": "{{$node['sap_get_order'].json.Comments|concat}}",
+                "orderNum": "{{$node['sap_get_order'].json.U_ReturnNo}}",
+                "accountName": "{{$node['sap_get_order'].json.CardName|concat}}",
+                "accountKey": "{{$node['sap_get_order'].json.CardCode|concat}}",
+                "createdDate": "{{$node['sap_get_order'].json.DocDate|toDate}}",
+                "status": "Updated"
+              },
+              "rows": "{{$arrayMap($node['sap_get_order'].json.DocumentLines,{\"makat\":\"\\\"{{ItemCode}}\\\"\",\"supplyQty\":\"{{Quantity}}\",\"byWeight\":true,\"des\":\"{{ItemDescription}}\",\"orderNum\":\"{{$node['sap_get_order'].json.U_ReturnNo}}\",\"remarks\":\"{{FreeText}}\"},\"json\")}}"
+            }
+          ]
+        }
+      },
+      "position": 7
+    },
+
+    {
+      "id": "gms_post_canceled",
+      "name": "GMS POST (header-only for canceled)",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.gmsBaseUrl}}/orders/upload",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        "body": {
+          "listOfOrderDocuments": [
+            {
+              "hed": {
+                "dueDate": "{{$node['sap_get_order'].json.DocDueDate|toDate}}",
+                "TEUDA": "{{$node['sap_get_order'].json.DocNum|concat}}",
+                "remarks": "Order canceled in SAP",
+                "orderNum": "{{$node['sap_get_order'].json.U_ReturnNo}}",
+                "accountName": "{{$node['sap_get_order'].json.CardName|concat}}",
+                "accountKey": "{{$node['sap_get_order'].json.CardCode|concat}}",
+                "createdDate": "{{$node['sap_get_order'].json.DocDate|toDate}}",
+                "status": "Canceled"
+              },
+              "rows": []
+            }
+          ]
+        }
+      },
+      "position": 8
+    },
+
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        }
+      },
+      "position": 9
+    }
+  ],
+  "connections": [
+    { "from": "sap_login", "to": "sap_get_order" },
+    { "from": "sap_get_order", "to": "decide_cancelled" },
+
+    { "from": "decide_cancelled", "to": "decide_create_or_update", "on": "true" },
+    { "from": "decide_cancelled", "to": "gms_post_canceled", "on": "false" },
+
+    { "from": "gms_post_canceled", "to": "sap_logout" },
+
+    { "from": "decide_create_or_update", "to": "gms_create_post", "on": "true" },
+    { "from": "gms_create_post", "to": "sap_update_orderNum" },
+    { "from": "sap_update_orderNum", "to": "sap_logout" },
+
+    { "from": "decide_create_or_update", "to": "gms_update_post", "on": "false" },
+    { "from": "gms_update_post", "to": "sap_logout" }
+  ],
+  "config": {
+    "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+    "sapBaseUrl": "http://localhost:50001/b1s/v1",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234",
+    "docEntry": 735,
+    "gmsBaseUrl": "http://199.203.140.245:44380/OrderPipeMidgeSapAPI"
+  }
+}

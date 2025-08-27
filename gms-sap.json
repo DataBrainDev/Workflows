@@ -1,0 +1,87 @@
+{
+  "workflow": {
+    "name": "GMS to SAP Invoice Integration",
+    "description": "Fetch invoice data from GMS API, create SAP invoice, and logout."
+  },
+  "nodes": [
+    {
+      "id": "gms_fetch_invoice",
+      "name": "Fetch GMS Invoice Data",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.gmsDummyApiUrl}}/order",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 1
+    },
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUserName}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "sap_create_invoice",
+      "name": "Create SAP Invoice",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Invoices",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "body": {
+          "CardCode": "{{$node['gms_fetch_invoice'].json.AccountKey}}",
+          "DocDate": "{{$node['gms_fetch_invoice'].json.CreatedDate}}",
+          "DocDueDate": "{{$node['gms_fetch_invoice'].json.DueDate}}",
+          "NumAtCard": "{{$node['gms_fetch_invoice'].json.teuda}}",
+          "DocumentLines": "{{$arrayMap($node['gms_fetch_invoice'].json.Rows,{\"ItemCode\":\"{{makat}}\",\"Quantity\":\"{{supplyQty}}\",\"UnitPrice\":\"{{Weight}}\"},\"json\")}}"
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        }
+      },
+      "position": 4
+    }
+  ],
+  "connections": [
+    { "from": "gms_fetch_invoice", "to": "sap_login" },
+    { "from": "sap_login", "to": "sap_create_invoice" },
+    { "from": "sap_create_invoice", "to": "sap_logout" }
+  ],
+  "config": {
+    "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+    "sapBaseUrl": "http://localhost:50001/b1s/v1",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234",
+    "gmsDummyApiUrl": "http://localhost:8089"
+  }
+}

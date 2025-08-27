@@ -1,0 +1,147 @@
+{
+  "workflow": {
+    "name": "SAP to Salesforce Integration",
+    "description": "Sync SAP Business Partner updates to Salesforce Account"
+  },
+  "nodes": [
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUserName}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 1
+    },
+    {
+      "id": "sap_fetch_bp",
+      "name": "Fetch SAP Business Partner",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://localhost:50001/b1s/v1/Items('Item_1')",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "sf_check_account",
+      "name": "Check Salesforce Account Exists",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/query?q=SELECT Id FROM Product2 WHERE ProductCode = '{{$node['get_items'].ItemCode}}'",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer {{config.sfAccessToken}}",
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "account_exists_check",
+      "name": "Account Exists?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$node['sf_check_account'].totalSize}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 4
+    },
+    {
+      "id": "sf_update_account",
+      "name": "Update Salesforce Account",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Product2/{{$node['sf_check_product'].Id}}",
+        "method": "PATCH",
+        "headers": {
+          "Authorization": "Bearer {{config.sfAccessToken}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          
+          "Name": "{{$node['get_items'].ItemName}}",
+          "Description": "{{$node['get_items'].ItemDescription}}",
+          "UOM__c": "{{$node['get_items'].UoM}}"
+
+
+          
+         
+          }
+      },
+      "position": 5
+    },
+    {
+      "id": "sf_create_account",
+      "name": "Create Salesforce Account",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Account",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer {{config.sfAccessToken}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "Name": "{{$node['get_items'].ItemName}}",
+          "ProductCode": "{{$node['get_items'].ItemCode}}",
+          "Description": "{{$node['get_items'].ItemDescription}}",
+          "UOM__c": "{{$node['get_items'].UoM}}"
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://localhost:50001/b1s/v1/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 6
+    }
+  ],
+  "connections": [
+    { "from": "sap_login", "to": "sap_fetch_bp" },
+    { "from": "sap_fetch_bp", "to": "sf_check_account" },
+    { "from": "sf_check_account", "to": "account_exists_check" },
+    { "from": "account_exists_check", "to": "sf_update_account", "branch": "true" },
+    { "from": "account_exists_check", "to": "sf_create_account", "branch": "false" },
+    { "from": "sf_update_account", "to": "sap_logout" },
+    { "from": "sf_create_account", "to": "sap_logout" }
+  ],
+  "config": {
+
+    "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234",
+    "sfInstanceUrl": "https://telran--integratio.sandbox.my.salesforce.com",
+    "sfAccessToken": "00Ddv0000023CbN!AQEAQBKqGpjKfsZFdjL0yXlgn.f0r4Nj2pNbaXHUuaUgTbFJ2X8vqtLXhVXc16dIXD4e4ra4vwf7KyCICCHXdHlvQXTfUHsD"
+  }
+}
