@@ -1,0 +1,237 @@
+{
+  "workflow": {
+    "name": "WooCommerce → SAP Sales Order (Upsert by U_WooId)",
+    "description": "If SAP Sales Order with U_WooId == Woo Order.id exists → PATCH it; else → POST a new Order. Only runs when PayPlus status is approved."
+  },
+  "nodes": [
+    {
+      "id": "woo_get_order",
+      "name": "Get Woo Order (from request body)",
+      "type": "GetBodyJson",
+      "parameters": {
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 1
+    },
+    {
+      "id": "if_payment_meta_exists",
+      "name": "If PayPlus Status Meta exists?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$metaexists('payplus_status','woo_get_order')}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "if_payment_approved",
+      "name": "If payment status approved?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$metaEq('payplus_status','approved','woo_get_order')}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "end_no_payment",
+      "name": "Stop (No PayPlus Status Meta)",
+      "type": "end",
+      "position": 4
+    },
+    {
+      "id": "end_payment_not_approved",
+      "name": "Stop (Payment Not Approved)",
+      "type": "end",
+      "position": 5
+    },
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUserName}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 6
+    },
+    {
+      "id": "sap_find_by_u_wooid",
+      "name": "Find SAP Order by U_WooId (SQL Query)",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/SQLQueries('DB_Orderexist')/List?Wooid='{{$node['woo_get_order'].json.id}}'",
+        "method": "GET",
+        "headers": {
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        }
+      },
+      "position": 7
+    },
+    {
+      "id": "if_exists",
+      "name": "If order exists?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$count($node['sap_find_by_u_wooid'].json.value)}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 8
+    },
+    {
+      "id": "sap_patch_order",
+      "name": "Update SAP Sales Order (PATCH)",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Orders({{$node['sap_find_by_u_wooid'].json.value[0].DocEntry}})",
+        "method": "PATCH",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "body": {
+          "NumAtCard": "{{$node['woo_get_order'].json.number}}",
+          "U_WooId": "{{$node['woo_get_order'].json.id}}",
+          "DocCurrency": "{{$node['woo_get_order'].json.currency}}",
+          "U_PayplusApproval": "{{$meta('payplus_approval_num','woo_get_order')}}",
+          "Address": "\u200B{{$node['woo_get_order'].json.billing.address_1|substring:0,70}} {{$node['woo_get_order'].json.billing.address_2|substring:0,30}}\r{{$node['woo_get_order'].json.billing.city|substring:0,40}} {{$node['woo_get_order'].json.billing.state|substring:0,10}} {{$node['woo_get_order'].json.billing.postcode|substring:0,15}}\r{{$node['woo_get_order'].json.billing.country|replace:IL,Israel|replace:US,United States|substring:0,30}}",
+          "Address2": "\u200B{{$node['woo_get_order'].json.shipping.address_1|substring:0,70}} {{$node['woo_get_order'].json.shipping.address_2|substring:0,30}}\r{{$node['woo_get_order'].json.shipping.city|substring:0,40}} {{$node['woo_get_order'].json.shipping.state|substring:0,10}} {{$node['woo_get_order'].json.shipping.postcode|substring:0,15}}\r{{$node['woo_get_order'].json.shipping.country|replace:IL,Israel|replace:US,United States|substring:0,30}}",
+          "DocumentLines": "{{$arrayMap($node['woo_get_order'].json.line_items,{\"ItemCode\":\"{{sku}}\",\"Quantity\":\"{{quantity}}\",\"UnitPrice\":\"{{price}}\"},\"json\")}}"
+        }
+      },
+      "position": 9
+    },
+    {
+      "id": "sap_post_order",
+      "name": "Create SAP Sales Order (POST)",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Orders",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "body": {
+          "CardCode": "{{$node['woo_get_order'].json.customer_id}}",
+          "DocDate": "{{$node['woo_get_order'].json.date_created|substring:0,10}}",
+          "DocDueDate": "{{$node['woo_get_order'].json.date_created|substring:0,10}}",
+          "NumAtCard": "{{$node['woo_get_order'].json.number}}",
+          "U_WooId": "{{$node['woo_get_order'].json.id}}",
+          "DocCurrency": "{{$coalesce($meta('payplus_currency'), $node['woo_get_order'].json.currency)}}",
+          "U_PayplusApproval": "{{$meta('payplus_approval_num','woo_get_order')}}",
+          "AuthorizationCode": "{{$meta('payplus_auth_num','woo_get_order')}}",
+          "U_TransUID": "{{$meta('payplus_transaction_uid','woo_get_order')}}",
+          "Address": "\u200B{{$node['woo_get_order'].json.billing.address_1|substring:0,70}} {{$node['woo_get_order'].json.billing.address_2|substring:0,30}}\r{{$node['woo_get_order'].json.billing.city|substring:0,40}} {{$node['woo_get_order'].json.billing.state|substring:0,10}} {{$node['woo_get_order'].json.billing.postcode|substring:0,15}}\r{{$node['woo_get_order'].json.billing.country|replace:IL,Israel|replace:US,United States|substring:0,30}}",
+          "Address2": "\u200B{{$node['woo_get_order'].json.shipping.address_1|substring:0,70}} {{$node['woo_get_order'].json.shipping.address_2|substring:0,30}}\r{{$node['woo_get_order'].json.shipping.city|substring:0,40}} {{$node['woo_get_order'].json.shipping.state|substring:0,10}} {{$node['woo_get_order'].json.shipping.postcode|substring:0,15}}\r{{$node['woo_get_order'].json.shipping.country|replace:IL,Israel|replace:US,United States|substring:0,30}}",
+          "DocumentLines": "{{$arrayMap($node['woo_get_order'].json.line_items,{\"ItemCode\":\"{{sku}}\",\"Quantity\":\"{{quantity}}\",\"UnitPrice\":\"{{price}}\"},\"json\")}}"
+        }
+      },
+      "position": 10
+    },
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        }
+      },
+      "position": 11
+    }
+  ],
+  "connections": [
+    {
+      "from": "woo_get_order",
+      "to": "if_payment_meta_exists"
+    },
+    {
+      "from": "if_payment_meta_exists",
+      "to": "if_payment_approved",
+      "branch": "true"
+    },
+    {
+      "from": "if_payment_meta_exists",
+      "to": "end_no_payment",
+      "branch": "false"
+    },
+    {
+      "from": "if_payment_approved",
+      "to": "sap_login",
+      "branch": "true"
+    },
+    {
+      "from": "if_payment_approved",
+      "to": "end_payment_not_approved",
+      "branch": "false"
+    },
+    {
+      "from": "sap_login",
+      "to": "sap_find_by_u_wooid"
+    },
+    {
+      "from": "sap_find_by_u_wooid",
+      "to": "if_exists"
+    },
+    {
+      "from": "if_exists",
+      "to": "sap_patch_order",
+      "branch": "true"
+    },
+    {
+      "from": "if_exists",
+      "to": "sap_post_order",
+      "branch": "false"
+    },
+    {
+      "from": "sap_patch_order",
+      "to": "sap_logout"
+    },
+    {
+      "from": "sap_post_order",
+      "to": "sap_logout"
+    }
+  ],
+  "config": {
+    "sapInstanceUrl": "http://localhost:50002/b1s/v1/Login",
+    "sapBaseUrl": "http://localhost:50002/b1s/v1",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234"
+  }
+}

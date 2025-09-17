@@ -1,0 +1,275 @@
+{
+  "workflow": {
+    "name": "GMS to SAP Invoice Integration",
+    "description": "Fetch GMS invoice data, get SAP Sales Order by teuda, map data, and create SAP invoice."
+  },
+  "nodes": [
+    {
+      "id": "gms_fetch_invoice",
+      "name": "Fetch GMS Invoice Data",
+      "type": "GetBodyJson",
+      "parameters": {
+        "url": "",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 1
+    },
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUserName}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "sap_fetch_sales_order",
+      "name": "Fetch SAP Sales Order",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://localhost:50002/b1s/v1/Orders?$select=DocEntry,U_TransUID,CardCode&$filter=DocNum%20eq%20{{$node['gms_fetch_invoice'].json.teuda}}",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "debug": true
+      },
+      "position": 3
+    },
+    {
+      "id": "sap_create_draft_invoice_from_order",
+      "name": "Create SAP Invoice from Order",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Drafts",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "body": {
+          "DocObjectCode": "13",
+          "CardCode": "{{$node['sap_fetch_sales_order'].json.value[0].CardCode}}",
+          "DocDate": "{{$node['gms_fetch_invoice'].json.CreatedDate}}",
+          "DocDueDate": "{{$node['gms_fetch_invoice'].json.DueDate}}",
+          "DocumentLines": "{{$arrayMap($node['gms_fetch_invoice'].json.Rows,{\"ItemCode\":\"{{makat}}\",\"Quantity\":\"{{supplyQty}}\",\"UnitPrice\":\"{{Weight}}\",\"BaseType\":\"17\",\"BaseEntry\":\"{{$node['sap_fetch_sales_order'].json.value[0].DocEntry}}\",\"BaseLine\":\"{{erpRowNum}}\"},\"json\")}}"
+        }
+      },
+      "position": 4
+    },
+    {
+      "id": "sap_fetch_draft_invoice_details",
+      "name": "Fetch Draft Invoice Details",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Drafts({{$node['sap_create_draft_invoice_from_order'].json.DocEntry}})?$select=DocTotal,U_TransUID",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "sap_charge_payment_via_payplus",
+      "name": "Charge Payment via PayPlus",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "https://restapidev.payplus.co.il/api/v1.0/Transactions/ChargeByTransactionUID",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "accept": "application/json",
+          "api-key": "{{config.payplusApiKey}}",
+          "secret-key": "{{config.payplusSecretKey}}"
+        },
+        "body": {
+          "transaction_uid": "{{$node['sap_fetch_draft_invoice_details'].json.U_TransUID}}",
+          "amount": 2
+        },
+        "debug": true
+      },
+      "position": 6
+    },
+    {
+      "id": "if_payment_success",
+      "name": "If PayPlus Payment Success?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "{{$node['sap_charge_payment_via_payplus'].json.results.status}}",
+              "operation": "equal",
+              "value2": "success"
+            }
+          ]
+        }
+      },
+      "position": 7
+    },
+    {
+      "id": "sap_create_actual_invoice",
+      "name": "Create Actual Invoice from Draft",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/DraftsService_SaveDraftToDocument",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}",
+          "Prefer": "return=representation"
+        },
+        "body": {
+          "Document": {
+            "DocEntry": "{{$node['sap_create_draft_invoice_from_order'].json.DocEntry}}"
+          }
+        },
+        "debug": true
+      },
+      "position": 8
+    },
+    {
+      "id": "sap_fetch_actual_invoice_details",
+      "name": "Fetch Actual Invoice Details",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "http://localhost:50002/b1s/v1/SQLQueries('DB_GetInvfromDraftt')/List?draftentry={{$node['sap_create_draft_invoice_from_order'].json.DocEntry}}",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "debug": true
+      },
+      "position": 9
+    },
+    {
+      "id": "sap_create_incoming_payment",
+      "name": "Create Incoming Payment",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/IncomingPayments",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        },
+        "body": {
+          "DocDate": "{{$node['sap_create_draft_invoice_from_order'].json.DocDate}}",
+          "CardCode": "{{$node['sap_create_draft_invoice_from_order'].json.CardCode}}",
+          "DocCurrency": "ILS",
+          "PaymentInvoices": [
+            {
+              "DocEntry": "{{$node['sap_fetch_actual_invoice_details'].json.value[0].DocEntry}}",
+              "SumApplied": "{{$node['sap_fetch_draft_invoice_details'].json.DocTotal}}"
+            }
+          ],
+          "PaymentCreditCards": [
+            {
+              "CreditCard": 1,
+              "CreditAcct": "1004",
+              "CreditSum": "{{$node['sap_fetch_draft_invoice_details'].json.DocTotal}}",
+              "CreditCardNumber": "34511111",
+              "OwnerIdNum": "123456789",
+              "VoucherNum": "PSP-REF-0001",
+              "CardValidUntil": "2025-11-30T00:00:00Z",
+              "NumOfPayments": 1
+            }
+          ],
+          "ElectronicProtocols": [
+            {
+              "ProtocolCode": "edpc_EII",
+              "GenerationType": "edgt_NotRelevant",
+              "MappingID": 0,
+              "TestingMode": "tNO"
+            }
+          ]
+        },
+        "debug": true
+      },
+      "position": 10
+    },
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+        }
+      },
+      "position": 11
+    }
+  ],
+  "connections": [
+    {
+      "from": "gms_fetch_invoice",
+      "to": "sap_login"
+    },
+    {
+      "from": "sap_login",
+      "to": "sap_fetch_sales_order"
+    },
+    {
+      "from": "sap_fetch_sales_order",
+      "to": "sap_create_draft_invoice_from_order"
+    },
+    {
+      "from": "sap_create_draft_invoice_from_order",
+      "to": "sap_fetch_draft_invoice_details"
+    },
+    {
+      "from": "sap_fetch_draft_invoice_details",
+      "to": "sap_charge_payment_via_payplus"
+    },
+    {
+      "from": "sap_charge_payment_via_payplus",
+      "to": "if_payment_success"
+    },
+    {
+      "from": "if_payment_success",
+      "to": "sap_create_actual_invoice",
+      "condition": "true"
+    },
+    {
+      "from": "sap_create_actual_invoice",
+      "to": "sap_fetch_actual_invoice_details"
+    },
+    {
+      "from": "sap_fetch_actual_invoice_details",
+      "to": "sap_create_incoming_payment"
+    },
+    {
+      "from": "sap_create_incoming_payment",
+      "to": "sap_logout"
+    }
+  ],
+  "config": {
+    "sapInstanceUrl": "http://localhost:50002/b1s/v1/Login",
+    "sapBaseUrl": "http://localhost:50002/b1s/v1",
+    "payplusApiKey": "b55d4d10-4acf-41a8-85c3-6f84154c9665",
+    "payplusSecretKey": "4e06422a-b0b1-46b0-b2fe-e953453a353f",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234"
+  }
+}

@@ -1,7 +1,7 @@
 {
   "workflow": {
     "name": "SAP → GMS SalesOrder (Create/Update + Cancel Handling, POST only)",
-    "description": "Fetch SAP SO, POST to GMS (create when orderNum empty, update when present), write back orderNum after create, and send header-only if Cancelled != tNO."
+    "description": "Fetch SAP SO, POST to GMS (create when U_ReturnNo empty, update when present), write back orderNum after create, and send header-only if Cancelled != tNO."
   },
   "nodes": [
     {
@@ -40,33 +40,36 @@
       "type": "if",
       "parameters": {
         "conditions": {
-          "string": [
+          "number": [
             {
-              "value1": "{{$node['sap_get_order'].json.Cancelled || $node['sap_get_order'].json.Canceled || $node['sap_get_order'].json.CANCELED || ''}}",
+              "value1": "{{$node['sap_get_order'].json.Cancelled|indexOf:tNO|concat}}",
               "operation": "equals",
-              "value2": "tNO"
+              "value2": 0
             }
           ]
         }
       },
       "position": 3
     },
+    
     {
       "id": "decide_create_or_update",
-      "name": "IF: Has GMS orderNum (U_ReturnNo)?",
+      "name": "IF: Missing GMS orderNum (U_ReturnNo)?",
       "type": "if",
       "parameters": {
         "conditions": {
-          "string": [
+          "number": [
             {
-              "value1": "{{$node['sap_get_order'].json.U_ReturnNo || ''}}",
-              "operation": "isEmpty"
+              "value1": "{{$coalesce($node['sap_get_order'].json.U_ReturnNo, 0)}}",
+              "operation": "equals",
+              "value2": 0
             }
           ]
         }
       },
       "position": 4
-    },
+    }
+    ,
 
     {
       "id": "gms_create_post",
@@ -81,7 +84,7 @@
         "body": {
           "listOfOrderDocuments": [
             {
-             "rows": "{{$arrayMap($node['sap_get_order'].json.DocumentLines,{\"makat\":\"{{ItemCode}}\",\"supplyQty\":\"{{Quantity}}\",\"byWeight\":true,\"des\":\"{{ItemDescription}}\",\"stockID\":\"\",\"stockMovesID\":\"\",\"orderNum\":\"\",\"status\":\"\",\"plastonSupplyQty\":\"0\",\"plastonNewQty\":\"0\",\"newQty\":\"0\",\"teuda\":\"\",\"remarks\":\"{{FreeText}}\"},\"json\")}}",
+              "rows": "{{$arrayMap($node['sap_get_order'].json.DocumentLines,{\"erpRowNum\":\"{{LineNum}}\",\"makat\":\"{{ItemCode}}\",\"supplyQty\":\"{{Quantity}}\",\"byWeight\":true,\"des\":\"{{ItemDescription}}\",\"stockID\":\"\",\"stockMovesID\":\"\",\"orderNum\":\"\",\"status\":\"\",\"plastonSupplyQty\":\"0\",\"plastonNewQty\":\"0\",\"newQty\":\"0\",\"teuda\":\"\",\"remarks\":\"{{FreeText}}\"},\"json\")}}",
               "hed": {
                 "dueDate": "{{$node['sap_get_order'].json.DocDueDate|toDate}}",
                 "teuda": "{{$node['sap_get_order'].json.DocNum|concat}}",
@@ -110,7 +113,7 @@
           "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
         },
         "body": {
-          "U_ReturnNo": "{{$node['gms_create_post'].json.orderNum}}"
+         "U_ReturnNo": "{{$node['gms_create_post'].json.orderNum}}"
         }
       },
       "position": 6
@@ -121,7 +124,7 @@
       "name": "GMS UPDATE (POST, orderNum present)",
       "type": "httpRequest",
       "parameters": {
-        "url": "http://199.203.140.245:44380/OrderPipeMidgeSapAPI/orders/upload",
+        "url": "{{config.gmsBaseUrl}}/orders/upload",
         "method": "POST",
         "headers": {
           "Content-Type": "application/json",
@@ -140,7 +143,7 @@
                 "createdDate": "{{$node['sap_get_order'].json.DocDate|toDate}}",
                 "status": "Updated"
               },
-              "rows": "{{$arrayMap($node['sap_get_order'].json.DocumentLines,{\"makat\":\"\\\"{{ItemCode}}\\\"\",\"supplyQty\":\"{{Quantity}}\",\"byWeight\":true,\"des\":\"{{ItemDescription}}\",\"orderNum\":\"{{$node['sap_get_order'].json.U_ReturnNo}}\",\"remarks\":\"{{FreeText}}\"},\"json\")}}"
+              "rows": "{{$arrayMap($node['sap_get_order'].json.DocumentLines,{\"erpRowNum\":\"{{LineNum}}\",\"makat\":\"{{ItemCode}}\",\"supplyQty\":\"{{Quantity}}\",\"byWeight\":true,\"des\":\"{{ItemDescription}}\",\"orderNum\":\"{{$node['sap_get_order'].json.U_ReturnNo}}\",\"remarks\":\"{{FreeText}}\"},\"json\")}}"
             }
           ]
         }
@@ -196,28 +199,28 @@
     }
   ],
   "connections": [
-    { "from": "sap_login", "to": "sap_get_order" },
-    { "from": "sap_get_order", "to": "decide_cancelled" },
+  { "from": "sap_login", "to": "sap_get_order" },
+  { "from": "sap_get_order", "to": "decide_cancelled" },
 
-    { "from": "decide_cancelled", "to": "decide_create_or_update", "on": "true" },
-    { "from": "decide_cancelled", "to": "gms_post_canceled", "on": "false" },
+  { "from": "decide_cancelled", "to": "decide_create_or_update", "branch": "true"},
+  { "from": "decide_cancelled", "to": "gms_post_canceled", "branch": "false" },
 
-    { "from": "gms_post_canceled", "to": "sap_logout" },
+  { "from": "gms_post_canceled", "to": "sap_logout" },
 
-    { "from": "decide_create_or_update", "to": "gms_create_post", "on": "true" },
-    { "from": "gms_create_post", "to": "sap_update_orderNum" },
-    { "from": "sap_update_orderNum", "to": "sap_logout" },
+  { "from": "decide_create_or_update", "to": "gms_create_post", "branch": "true" },
+  { "from": "gms_create_post", "to": "sap_update_orderNum" },
+  { "from": "sap_update_orderNum", "to": "sap_logout" },
 
-    { "from": "decide_create_or_update", "to": "gms_update_post", "on": "false" },
-    { "from": "gms_update_post", "to": "sap_logout" }
-  ],
+  { "from": "decide_create_or_update", "to": "gms_update_post", "branch": "false" },
+  { "from": "gms_update_post", "to": "sap_logout" }
+],
   "config": {
-    "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
-    "sapBaseUrl": "http://localhost:50001/b1s/v1",
+    "sapInstanceUrl": "http://localhost:50002/b1s/v1/Login",
+    "sapBaseUrl": "http://localhost:50002/b1s/v1",
     "sapCompanyDB": "SBODEOIL4",
     "sapUserName": "Brijesh",
     "sapPassword": "1234",
-    "docEntry": 735,
+    "docEntry": 772,
     "gmsBaseUrl": "http://199.203.140.245:44380/OrderPipeMidgeSapAPI"
   }
 }

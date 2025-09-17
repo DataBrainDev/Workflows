@@ -1,0 +1,104 @@
+{
+    "workflow": {
+        "name": "SAP → WooCommerce Special Prices Sync",
+        "description": "Fetch SAP special prices and update WooCommerce via custom price-list endpoint"
+    },
+    "nodes": [
+        {
+            "id": "sap_login",
+            "name": "SAP B1 Login",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapInstanceUrl}}",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": {
+                    "CompanyDB": "{{config.sapCompanyDB}}",
+                    "UserName": "{{config.sapUserName}}",
+                    "Password": "{{config.sapPassword}}"
+                }
+            },
+            "position": 1,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1000
+            }
+        },
+        {
+            "id": "sap_fetch_special_prices",
+            "name": "Fetch SAP Special Prices",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapBaseUrl}}/Items('ITEM001')",
+                "method": "GET",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                }
+            },
+            "position": 2
+        },
+        {
+            "id": "wc_update_price_list",
+            "name": "WooCommerce Update Price List",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.wcPriceListEndpointUrl}}",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": {
+                    "sku": "{{$node['sap_fetch_special_prices'].ItemCode}}",
+                    "Name": "{{$node['sap_fetch_special_prices'].ItemName}}",
+                  "price_lists": "{{$arrayMap($node['sap_fetch_special_prices'].json.ItemPrices,{\"list\":\"{{PriceList}}\",\"price\":\"{{Price}}\"},\"json\")}}"
+                }
+            },
+            "position": 3,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1500
+            }
+        },
+        {
+            "id": "sap_logout",
+            "name": "SAP B1 Logout",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapBaseUrl}}/Logout",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                }
+            },
+            "position": 4
+        }
+    ],
+    "connections": [
+        {
+            "from": "sap_login",
+            "to": "sap_fetch_special_prices"
+        },
+        {
+            "from": "sap_fetch_special_prices",
+            "to": "wc_update_price_list"
+        },
+        {
+            "from": "wc_update_price_list",
+            "to": "sap_logout"
+        }
+    ],
+    "config": {
+        "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+        "sapBaseUrl": "http://localhost:50001/b1s/v1",
+        "sapCompanyDB": "SBODEOIL4",
+        "sapUserName": "Brijesh",
+        "sapPassword": "1234",
+        "wcPriceListEndpointUrl": "https://woocommerce-1181660-4488293.cloudwaysapps.com/wp-json/hybrid/v1/shopify/price-list/update"
+    }
+}

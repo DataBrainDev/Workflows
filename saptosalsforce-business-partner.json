@@ -83,7 +83,7 @@
         "conditions": {
           "number": [
             {
-              "value1": "{{$node['sf_check_account'].totalSize}}",
+              "value1": "{{$node['sf_check_account'].totalSize | toFixed:0}}",
               "operation": "greater",
               "value2": 0
             }

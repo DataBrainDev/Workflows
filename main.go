@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync" 
+	"sync"
 	"time"
 )
 
@@ -80,8 +81,8 @@ type WorkflowEngine struct {
 }
 
 var (
-    lastOrderPayload map[string]interface{} // Stores the latest posted JSON
-    lastOrderMutex   = &sync.Mutex{}
+	lastOrderPayload map[string]interface{} // Stores the latest posted JSON
+	lastOrderMutex   = &sync.Mutex{}
 )
 
 func NewWorkflowEngine(workflowJSON string) (*WorkflowEngine, error) {
@@ -668,8 +669,12 @@ func (we *WorkflowEngine) executeArrayMap(node *Node) error {
 	case []interface{}:
 		items = v
 	case string:
+		// var parsed []interface{}
+		// err := json.Unmarshal([]byte(v), &parsed)
 		var parsed []interface{}
-		err := json.Unmarshal([]byte(v), &parsed)
+		dec := json.NewDecoder(strings.NewReader(v))
+		dec.UseNumber()
+		err := dec.Decode(&parsed)
 		if err != nil {
 			return fmt.Errorf("executeArrayMap: sourceArray is string but not JSON array, value=%v", v)
 		}
@@ -1031,6 +1036,74 @@ func (we *WorkflowEngine) resolveExpression(expr string) interface{} {
 
 				return out
 
+			case "count": 
+				inner := we.resolveExpression(arg1)
+				switch v := inner.(type) {
+				case []interface{}:
+					return fmt.Sprintf("%d", len(v)) // return string so your IF's ParseFloat still works
+				case map[string]interface{}:
+					return fmt.Sprintf("%d", len(v)) // count object keys
+				case string:
+					// if a JSON string was passed, try to parse and count
+					var any interface{}
+					if err := json.Unmarshal([]byte(v), &any); err == nil {
+						if arr, ok := any.([]interface{}); ok {
+							return fmt.Sprintf("%d", len(arr))
+						}
+						if obj, ok := any.(map[string]interface{}); ok {
+							return fmt.Sprintf("%d", len(obj))
+						}
+					}
+					return "0"
+				default:
+					return "0"
+				}
+			case "meta":
+				// {{$meta('payplus_approval_num','woo_get_order')}}
+				key := strings.Trim(arg1, `"' `)
+				// 2nd arg = source (node name ya $node[...] expr)
+				if src := we.resolveSourceMap(arg2); src != nil {
+					return getMeta(src, key)
+				}
+				if order := getLastOrder(); order != nil { // optional fallback
+					return getMeta(order, key)
+				}
+				return ""
+
+			case "metaeq":
+				// {{$metaEq('payplus_status','approved','woo_get_order')}}
+				key := strings.Trim(arg1, `"' `)
+				expected := strings.Trim(arg2, `"' `)
+				// 3rd arg = source
+				if src := we.resolveSourceMap(arg3); src != nil {
+					if strings.EqualFold(getMeta(src, key), expected) {
+						return "1"
+					}
+					return "0"
+				}
+				if order := getLastOrder(); order != nil {
+					if strings.EqualFold(getMeta(order, key), expected) {
+						return "1"
+					}
+				}
+				return "0"
+
+			case "metaexists":
+				// {{$metaexists('payplus_status','woo_get_order')}}
+				key := strings.Trim(arg1, `"' `)
+				if src := we.resolveSourceMap(arg2); src != nil {
+					if metaExists(src, key) {
+						return "1"
+					}
+					return "0"
+				}
+				if order := getLastOrder(); order != nil {
+					if metaExists(order, key) {
+						return "1"
+					}
+				}
+				return "0"
+
 			case "coalesce":
 				// Return the first non-empty / non-nil value among up to 3 args
 				for _, raw := range []string{arg1, arg2, arg3} {
@@ -1075,6 +1148,60 @@ func (we *WorkflowEngine) resolveExpression(expr string) interface{} {
 	return value
 }
 
+// func (we *WorkflowEngine) arrayMapEval(
+// 	source interface{},
+// 	mapping map[string]interface{},
+// 	coerceNumbers bool,
+// ) ([]map[string]interface{}, error) {
+// 	var items []interface{}
+
+// 	switch v := source.(type) {
+// 	case []interface{}:
+// 		items = v
+// 	case string:
+// 		var parsed []interface{}
+// 		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
+// 			return nil, fmt.Errorf("arrayMap: source string is not JSON array: %w", err)
+// 		}
+// 		items = parsed
+// 	case map[string]interface{}:
+// 		for _, obj := range v {
+// 			items = append(items, obj)
+// 		}
+// 	default:
+// 		return nil, fmt.Errorf("arrayMap: source is not array-like, got %T", source)
+// 	}
+
+// 	out := make([]map[string]interface{}, 0, len(items))
+// 	for _, item := range items {
+// 		row, ok := item.(map[string]interface{})
+// 		if !ok {
+// 			continue
+// 		}
+
+// 		mapped := make(map[string]interface{}, len(mapping))
+// 		for k, tmpl := range mapping {
+// 			val := we.resolveTemplateWithContext(tmpl, row)
+// 			if coerceNumbers {
+// 				if s, ok := val.(string); ok {
+// 					if i, err := strconv.Atoi(s); err == nil {
+// 						val = i
+// 					} else if f, err := strconv.ParseFloat(s, 64); err == nil {
+// 						val = f
+// 					}
+// 				}
+// 			}
+// 			mapped[k] = val
+// 		}
+// 		out = append(out, mapped)
+// 	}
+// 	pretty, _ := json.MarshalIndent(out, "", "  ")
+// 	fmt.Println("DocumentLines Generated:", string(pretty))
+
+// 	return out, nil
+
+// }
+
 func (we *WorkflowEngine) arrayMapEval(
 	source interface{},
 	mapping map[string]interface{},
@@ -1082,12 +1209,15 @@ func (we *WorkflowEngine) arrayMapEval(
 ) ([]map[string]interface{}, error) {
 	var items []interface{}
 
+	// --- source normalize  ---
 	switch v := source.(type) {
 	case []interface{}:
 		items = v
 	case string:
+		dec := json.NewDecoder(strings.NewReader(v))
+		dec.UseNumber()
 		var parsed []interface{}
-		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
+		if err := dec.Decode(&parsed); err != nil {
 			return nil, fmt.Errorf("arrayMap: source string is not JSON array: %w", err)
 		}
 		items = parsed
@@ -1099,6 +1229,7 @@ func (we *WorkflowEngine) arrayMapEval(
 		return nil, fmt.Errorf("arrayMap: source is not array-like, got %T", source)
 	}
 
+	// ---create output  ---
 	out := make([]map[string]interface{}, 0, len(items))
 	for _, item := range items {
 		row, ok := item.(map[string]interface{})
@@ -1109,24 +1240,180 @@ func (we *WorkflowEngine) arrayMapEval(
 		mapped := make(map[string]interface{}, len(mapping))
 		for k, tmpl := range mapping {
 			val := we.resolveTemplateWithContext(tmpl, row)
-			if coerceNumbers {
-				if s, ok := val.(string); ok {
-					if i, err := strconv.Atoi(s); err == nil {
-						val = i
-					} else if f, err := strconv.ParseFloat(s, 64); err == nil {
-						val = f
-					}
+
+			// 🔹  val is string and {{$ ... }} in expression in this then→ evaluate
+			if s, ok := val.(string); ok {
+				ts := strings.TrimSpace(s)
+				if strings.HasPrefix(ts, "{{$") && strings.HasSuffix(ts, "}}") {
+					inner := strings.TrimSuffix(strings.TrimPrefix(ts, "{{"), "}}")
+					val = we.resolveExpression(strings.TrimSpace(inner))
 				}
 			}
+
+			// 🔹 number coercion (normalizeForJSON use)
+			if coerceNumbers {
+				val = normalizeForJSON(val)
+			}
+
 			mapped[k] = val
 		}
 		out = append(out, mapped)
 	}
+
+	// debug print
 	pretty, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println("DocumentLines Generated:", string(pretty))
 
 	return out, nil
+}
 
+// --- helpers ---
+
+func normalizeForJSON(v interface{}) interface{} {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case bool:
+		return t
+	case json.Number:
+		s := t.String()
+		if isDecimalString(s) {
+			if f, err := t.Float64(); err == nil {
+				return f
+			}
+			return t
+		}
+		// integer-like => keep as string
+		return s
+	case float64:
+		// if whole number → string; else keep as number
+		if t == math.Trunc(t) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return t
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprintf("%v", t)
+	case string:
+		s := strings.TrimSpace(t)
+		// booleans
+		if strings.EqualFold(s, "true") {
+			return true
+		}
+		if strings.EqualFold(s, "false") {
+			return false
+		}
+		// decimals become numbers; integer-like stays quoted
+		if isDecimalString(s) {
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				return f
+			}
+		}
+		return t
+	default:
+		return t
+	}
+}
+
+func isDecimalString(s string) bool {
+	if !strings.Contains(s, ".") {
+		return false
+	}
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
+
+func (we *WorkflowEngine) resolveSourceMap(arg string) map[string]interface{} {
+	raw := strings.TrimSpace(arg)
+	if raw == "" {
+		return nil
+	}
+
+	if strings.HasPrefix(raw, "$") { // $node['X'].json
+		if v := we.resolveBaseExpression(raw); v != nil {
+			if m, ok := v.(map[string]interface{}); ok {
+				return m
+			}
+			if s, ok := v.(string); ok && strings.HasPrefix(strings.TrimSpace(s), "{") {
+				if any, err := parseJSON(s); err == nil {
+					if m, ok := any.(map[string]interface{}); ok {
+						return m
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// "X" / 'X' → $node['X'].json
+	name := strings.Trim(raw, `"' `)
+	if name != "" {
+		expr := fmt.Sprintf("$node['%s'].json", name)
+		if v := we.resolveBaseExpression(expr); v != nil {
+			if m, ok := v.(map[string]interface{}); ok {
+				return m
+			}
+		}
+	}
+
+	// generic expression → map
+	if v := we.resolveExpression(raw); v != nil {
+		if m, ok := v.(map[string]interface{}); ok {
+			return m
+		}
+		if s, ok := v.(string); ok && strings.HasPrefix(strings.TrimSpace(s), "{") {
+			if any, err := parseJSON(s); err == nil {
+				if m, ok := any.(map[string]interface{}); ok {
+					return m
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// metaExists checks if given meta key exists in node's meta_data array
+func metaExists(nodeData map[string]interface{}, key string) bool {
+	if metaArr, ok := nodeData["meta_data"].([]interface{}); ok {
+		for _, m := range metaArr {
+			if meta, ok := m.(map[string]interface{}); ok {
+				if k, ok := meta["key"].(string); ok && k == key {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// getMeta returns value for a meta_data key; "" if not found.
+func getMeta(order map[string]interface{}, key string) string {
+	metaArr, ok := order["meta_data"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, m := range metaArr {
+		if meta, ok := m.(map[string]interface{}); ok {
+			if fmt.Sprint(meta["key"]) == key {
+				return fmt.Sprint(meta["value"])
+			}
+		}
+	}
+	return ""
+}
+
+// Optional: safe accessor if you also keep a global frozen copy
+func getLastOrder() map[string]interface{} {
+	lastOrderMutex.Lock()
+	defer lastOrderMutex.Unlock()
+	switch v := any(lastOrderPayload).(type) {
+	case map[string]interface{}:
+		return v
+	case *map[string]interface{}:
+		if v != nil {
+			return *v
+		}
+	}
+	return nil
 }
 
 func (we *WorkflowEngine) resolveBaseExpression(expr string) interface{} {
@@ -1418,10 +1705,20 @@ func endsWith(s, suffix string) bool {
 }
 
 // parseJSON parses a JSON string into a Go data structure (map, slice, etc.).
+//
+//	func parseJSON(s string) (interface{}, error) {
+//		var data interface{}
+//		err := json.Unmarshal([]byte(s), &data)
+//		return data, err
+//	}
 func parseJSON(s string) (interface{}, error) {
 	var data interface{}
-	err := json.Unmarshal([]byte(s), &data)
-	return data, err
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	if err := dec.Decode(&data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // stringifyJSON converts a Go data structure into a JSON string.
@@ -1479,91 +1776,90 @@ func toFixed(num float64, digits int) string {
 
 // POST /createOrder -> store JSON and trigger workflow
 func createOrderHandler(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-    body, err := io.ReadAll(r.Body)
-    if err != nil {
-        http.Error(w, "Failed to read request body", http.StatusBadRequest)
-        return
-    }
-    defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
 
-    // Parse any JSON dynamically
-    var data map[string]interface{}
-    if err := json.Unmarshal(body, &data); err != nil {
-        http.Error(w, "Invalid JSON", http.StatusBadRequest)
-        return
-    }
+	// Parse any JSON dynamically
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
 
-    // Store posted JSON
-    lastOrderMutex.Lock()
-    lastOrderPayload = data
-    lastOrderMutex.Unlock()
+	// Store posted JSON
+	lastOrderMutex.Lock()
+	lastOrderPayload = data
+	lastOrderMutex.Unlock()
 
-    pretty, _ := json.MarshalIndent(data, "", "  ")
-    fmt.Println("📥 Received JSON Payload:\n", string(pretty))
+	pretty, _ := json.MarshalIndent(data, "", "  ")
+	fmt.Println("📥 Received JSON Payload:\n", string(pretty))
 
-    // Load workflow file
-    jsonBytes, err := os.ReadFile("gms-sap.json")
-    if err != nil {
-        http.Error(w, "Failed to read workflow file", http.StatusInternalServerError)
-        return
-    }
+	// Load workflow file
+	jsonBytes, err := os.ReadFile("gms-sap.json")
+	if err != nil {
+		http.Error(w, "Failed to read workflow file", http.StatusInternalServerError)
+		return
+	}
 
-    engine, err := NewWorkflowEngine(string(jsonBytes))
-    if err != nil {
-        http.Error(w, "Failed to create workflow engine", http.StatusInternalServerError)
-        return
-    }
+	engine, err := NewWorkflowEngine(string(jsonBytes))
+	if err != nil {
+		http.Error(w, "Failed to create workflow engine", http.StatusInternalServerError)
+		return
+	}
 
-    // Override config to point to our local endpoint
-    if engine.context.Config == nil {
-        engine.context.Config = map[string]interface{}{}
-    }
-    engine.context.Config["gmsDummyApiUrl"] = "http://localhost:8089"
+	// Override config to point to our local endpoint
+	if engine.context.Config == nil {
+		engine.context.Config = map[string]interface{}{}
+	}
+	engine.context.Config["gmsDummyApiUrl"] = "http://localhost:8089"
 
-    // Execute the workflow now
-    if err := engine.Execute(); err != nil {
-        http.Error(w, "Workflow execution failed", http.StatusInternalServerError)
-        return
-    }
+	// Execute the workflow now
+	if err := engine.Execute(); err != nil {
+		http.Error(w, "Workflow execution failed", http.StatusInternalServerError)
+		return
+	}
 
-    // Send response
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
-    w.Write([]byte(`{"status":"success","message":"JSON received successfully"}`))
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"success","message":"JSON received successfully"}`))
 }
 
 // GET /order -> used by workflow's first node to fetch posted JSON
 func orderHandler(w http.ResponseWriter, r *http.Request) {
-    lastOrderMutex.Lock()
-    payload := lastOrderPayload
-    lastOrderMutex.Unlock()
+	lastOrderMutex.Lock()
+	payload := lastOrderPayload
+	lastOrderMutex.Unlock()
 
-    if payload == nil {
-        http.Error(w, "No order payload posted yet", http.StatusNotFound)
-        return
-    }
+	if payload == nil {
+		http.Error(w, "No order payload posted yet", http.StatusNotFound)
+		return
+	}
 
-    // Workflow expects the inner object if JSON contains {"Order": {...}}
-    if inner, ok := payload["Order"].(map[string]interface{}); ok {
-        payload = inner
-    }
+	// Workflow expects the inner object if JSON contains {"Order": {...}}
+	if inner, ok := payload["Order"].(map[string]interface{}); ok {
+		payload = inner
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(payload)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(payload)
 }
-
 
 func main() {
 	// http.HandleFunc("/createOrder", createOrderHandler)
-    // http.HandleFunc("/order", orderHandler)
+	// http.HandleFunc("/order", orderHandler)
 
-    // fmt.Println("🚀 Server running at http://localhost:8089")
-    // log.Fatal(http.ListenAndServe(":8089", nil))
+	// fmt.Println("🚀 Server running at http://localhost:8089")
+	// log.Fatal(http.ListenAndServe(":8089", nil))
 
 	jsonBytes, err := os.ReadFile("sap-gms-salsorder.json")
 	if err != nil {

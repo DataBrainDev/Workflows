@@ -1,0 +1,149 @@
+{
+    "workflow": {
+        "name": "SAP → WooCommerce Item Sync",
+        "description": "Fetch SAP Item Master and upsert to WooCommerce via custom endpoint"
+    },
+    "nodes": [
+        {
+            "id": "sap_login",
+            "name": "SAP B1 Login",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapInstanceUrl}}",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": {
+                    "CompanyDB": "{{config.sapCompanyDB}}",
+                    "UserName": "{{config.sapUserName}}",
+                    "Password": "{{config.sapPassword}}"
+                }
+            },
+            "position": 1,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1000
+            }
+        },
+        {
+            "id": "sap_fetch_item",
+            "name": "Fetch SAP Item Master",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapBaseUrl}}/view.svc/vw_DB_GetItemsforShopifyB1SLQuery?$filter=ItemCode%20eq%20%27A00002%27",
+                "method": "GET",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                }
+            },
+            "position": 2
+        },
+        {
+            "id": "wc_upsert_product",
+            "name": "WooCommerce Upsert Product",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.wcEndpointUrl}}",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": {
+                    "sku": "{{$node['sap_fetch_item'].ItemCode}}",
+                    "name": "{{$node['sap_fetch_item'].ItemName}}",
+                    "GroupName": "{{$node['sap_fetch_item'].GroupName}}",
+                    "description": "{{$node['sap_fetch_item'].ItemName}}",
+                    "status": "publish",
+                    "manage_stock": true,
+                    "stock_quantity": "{{$node['sap_fetch_item'].OnHand}}",
+                    "regular_price": "{{$node['sap_fetch_item'].Price}}",
+                    "type": "simple",
+                    "short_description": "{{$node['sap_fetch_item'].U_ShortDesc}}",
+                    "brand": "{{$node['sap_fetch_item'].U_Brand}}",
+                    "bsyCategory1": "{{$node['sap_fetch_item'].U_bsyCategory1}}",
+                    "color": "{{$node['sap_fetch_item'].U_Color}}",
+                    "size": "{{$node['sap_fetch_item'].U_Size}}",
+                    "content": "{{$node['sap_fetch_item'].U_content}}",
+                    "type_description": "{{$node['sap_fetch_item'].U_Type}}",
+                    "weight": "{{$node['sap_fetch_item'].U_Weight}}",
+                    "box_quantity": "{{$node['sap_fetch_item'].U_box_quantity}}",
+                    "barcode": "{{$node['sap_fetch_item'].U_Barcode}}",
+                    "bsyCategory2": "{{$node['sap_fetch_item'].U_bsyCategory2}}",
+                    "bsyCategory3": "{{$node['sap_fetch_item'].U_bsyCategory3}}",
+                    "Child": "{{$arrayMap($node['sap_fetch_item'].json.Child,{\"sku\":\"{{ItemCode}}\",\"ItemName\":\"{{ItemName}}\",\"U_Color\":\"{{U_Color}}\",\"U_Type\":\"{{U_Type}}\"},\"json\")}}",
+                    "meta_data": [
+                        {
+                            "key": "foreign_name",
+                            "value": "{{$node['sap_fetch_item'].ForeignName}}"
+                        },
+                        {
+                            "key": "items_group_code",
+                            "value": "{{$node['sap_fetch_item'].ItemType}}"
+                        },
+                        {
+                            "key": "valid",
+                            "value": "{{$node['sap_fetch_item'].Valid | toBoolean}}"
+                        },
+                        {
+                            "key": "sale_item",
+                            "value": "{{$node['sap_fetch_item'].SalesItem | toBoolean}}"
+                        },
+                        {
+                            "key": "purchase_item",
+                            "value": "{{$node['sap_fetch_item'].PurchaseItem | toBoolean}}"
+                        },
+                        {
+                            "key": "sap_type",
+                            "value": "{{$node['sap_fetch_item'].Type}}"
+                        }
+                    ]
+                }
+            },
+            "position": 3,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1500
+            }
+        },
+        {
+            "id": "sap_logout",
+            "name": "SAP B1 Logout",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapBaseUrl}}/Logout",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+                }
+            },
+            "position": 4
+        }
+    ],
+    "connections": [
+        {
+            "from": "sap_login",
+            "to": "sap_fetch_item"
+        },
+        {
+            "from": "sap_fetch_item",
+            "to": "wc_upsert_product"
+        },
+        {
+            "from": "wc_upsert_product",
+            "to": "sap_logout"
+        }
+    ],
+    "config": {
+        "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+        "sapBaseUrl": "http://localhost:50001/b1s/v1",
+        "sapCompanyDB": "SBODEOIL4",
+        "sapUserName": "Brijesh",
+        "sapPassword": "1234",
+        "wcEndpointUrl": "https://woocommerce-1181660-4488293.cloudwaysapps.com/wp-json/hybrid/v1/shopify/products/update"
+    }
+}

@@ -1,0 +1,118 @@
+{
+    "workflow": {
+        "name": "SAP → WooCommerce Delivery → Shipment",
+        "description": "Fetch SAP Delivery (ODLN) and post shipment with rows mapped via arrayMap"
+    },
+    "nodes": [
+        {
+            "id": "sap_login",
+            "name": "SAP B1 Login",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapInstanceUrl}}",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": {
+                    "CompanyDB": "{{config.sapCompanyDB}}",
+                    "UserName": "{{config.sapUserName}}",
+                    "Password": "{{config.sapPassword}}"
+                }
+            },
+            "position": 1,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1000
+            }
+        },
+        {
+            "id": "sap_fetch_delivery",
+            "name": "Fetch SAP Delivery (ODLN)",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapBaseUrl}}/DeliveryNotes({{config.sapDeliveryDocEntry}})",
+                "method": "GET",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+                }
+            },
+            "position": 2,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1000
+            }
+        },
+        {
+            "id": "wc_create_shipment",
+            "name": "WooCommerce Create Shipment",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.wcDeliveryEndpointUrl}}",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": {
+                    "action": "create_shipment",
+                    
+                    "shipment": {
+                        "doc_num": "{{$node['sap_fetch_delivery'].json.DocNum}}",
+                        "doc_entry": "{{$node['sap_fetch_delivery'].json.DocEntry}}",
+                        "date_shipped": "{{$node['sap_fetch_delivery'].json.DocDate}}",
+                        "tracking_number": "{{$node['sap_fetch_delivery'].json.TrackingNumber || ''}}",
+                        "carrier": "{{$node['sap_fetch_delivery'].json.U_Carrier || ''}}",
+                        "notes": "{{$node['sap_fetch_delivery'].json.Comments || ''}}",
+                        "items": "{{$arrayMap($node['sap_fetch_delivery'].json.DocumentLines,{\"sku\":\"{{ItemCode}}\",\"quantity\":\"{{Quantity}}\",\"byWeight\":true,\"des\":\"{{ItemDescription}}\",\"stockID\":\"\",\"stockMovesID\":\"\",\"orderNum\":\"\",\"status\":\"\",\"plastonSupplyQty\":\"0\",\"plastonNewQty\":\"0\",\"newQty\":\"0\",\"teuda\":\"\",\"price\":\"{{UnitPrice}}\",\"remarks\":\"{{FreeText}}\"},\"json\")}}"
+                    }
+                }
+            },
+            "position": 3,
+            "retry": {
+                "enabled": true,
+                "maxAttempts": 3,
+                "delay": 1500
+            }
+        },
+        {
+            "id": "sap_logout",
+            "name": "SAP B1 Logout",
+            "type": "httpRequest",
+            "parameters": {
+                "url": "{{config.sapBaseUrl}}/Logout",
+                "method": "POST",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
+                }
+            },
+            "position": 4
+        }
+    ],
+    "connections": [
+        {
+            "from": "sap_login",
+            "to": "sap_fetch_delivery"
+        },
+        {
+            "from": "sap_fetch_delivery",
+            "to": "wc_create_shipment"
+        },
+        {
+            "from": "wc_create_shipment",
+            "to": "sap_logout"
+        }
+    ],
+    "config": {
+        "sapInstanceUrl": "http://localhost:50001/b1s/v1/Login",
+        "sapBaseUrl": "http://localhost:50001/b1s/v1",
+        "sapCompanyDB": "SBODEOIL4",
+        "sapUserName": "Brijesh",
+        "sapPassword": "1234",
+        "sapDeliveryDocEntry": 468,
+        "wcDeliveryEndpointUrl": "https://woocommerce-1181660-4488293.cloudwaysapps.com/wp-json/hybrid/v1/shopify/order/update"
+    }
+}
