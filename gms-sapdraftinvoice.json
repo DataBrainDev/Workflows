@@ -100,7 +100,7 @@
         },
         "body": {
           "transaction_uid": "{{$node['sap_fetch_draft_invoice_details'].json.U_TransUID}}",
-          "amount": 2
+          "amount": "{{$node['sap_fetch_draft_invoice_details'].json.DocTotal}}"
         },
         "debug": true
       },
@@ -112,11 +112,11 @@
       "type": "if",
       "parameters": {
         "conditions": {
-          "string": [
+          "number": [
             {
-              "value1": "{{$node['sap_charge_payment_via_payplus'].json.results.status}}",
-              "operation": "equal",
-              "value2": "success"
+              "value1": "{{$node['sap_charge_payment_via_payplus'].json.results.code | toFixed:0}}",
+              "operation": "equals",
+              "value2": 0
             }
           ]
         }
@@ -206,6 +206,24 @@
       "position": 10
     },
     {
+      "id": "email_on_payment_failed",
+      "name": "Email on Payment Failure",
+      "type": "sendEmail",
+      "parameters": {
+        "host": "{{config.host}}",
+        "port": "{{config.port}}",
+        "username": "{{config.username}}",
+        "password": "{{config.password}}",
+        "from": "{{config.from}}",
+        "to": "{{config.to}}",
+        "encryption": "{{config.encryption}}",
+        "subject": "PayPlus FAILED: draft {{$node['sap_create_draft_invoice_from_order'].json.DocEntry}}",
+        "html": "<h3>Charge failed</h3><p><b>Status:</b> {{$node['sap_charge_payment_via_payplus'].json.results.status}}</p><p><b>HTTP Code:</b> {{$node['sap_charge_payment_via_payplus'].httpStatusCode}}</p><p><b>TransUID:</b> {{$node['sap_fetch_draft_invoice_details'].json.U_TransUID}}</p><p><b>DocTotal:</b> {{$node['sap_fetch_draft_invoice_details'].json.DocTotal}}</p>",
+        "text": "Charge failed\nStatus: {{$node['sap_charge_payment_via_payplus'].json.results.status}}\nHTTP Code: {{$node['sap_charge_payment_via_payplus'].httpStatusCode}}\nTransUID: {{$node['sap_fetch_draft_invoice_details'].json.U_TransUID}}\nDocTotal: {{$node['sap_fetch_draft_invoice_details'].json.DocTotal}}"
+      },
+      "position": 11
+    },
+    {
       "id": "sap_logout",
       "name": "SAP B1 Logout",
       "type": "httpRequest",
@@ -248,7 +266,12 @@
     {
       "from": "if_payment_success",
       "to": "sap_create_actual_invoice",
-      "condition": "true"
+      "branch": "true"
+    },
+    {
+      "from": "if_payment_success",
+      "to": "email_on_payment_failed",
+      "branch": "false"
     },
     {
       "from": "sap_create_actual_invoice",
@@ -257,6 +280,10 @@
     {
       "from": "sap_fetch_actual_invoice_details",
       "to": "sap_create_incoming_payment"
+    },
+    {
+      "from": "email_on_payment_failed",
+      "to": "sap_logout"
     },
     {
       "from": "sap_create_incoming_payment",
@@ -270,6 +297,13 @@
     "payplusSecretKey": "4e06422a-b0b1-46b0-b2fe-e953453a353f",
     "sapCompanyDB": "SBODEOIL4",
     "sapUserName": "Brijesh",
-    "sapPassword": "1234"
+    "sapPassword": "1234",
+    "host": "smtp.office365.com",
+    "port": 587,
+    "username": "Ticket@DataBrain.co.il",
+    "password": "X!360557980337ul",
+    "from": "Ticket@DataBrain.co.il",
+    "to": "prajapatibrijesh2105@gmail.com",
+    "encryption": "STARTTLS"
   }
 }

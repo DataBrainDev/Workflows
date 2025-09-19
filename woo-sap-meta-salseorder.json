@@ -53,12 +53,30 @@
       "id": "end_no_payment",
       "name": "Stop (No PayPlus Status Meta)",
       "type": "end",
+      "parameters": {
+        "response": {
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "Payment field not found in Woo Order"
+          }
+        }
+      },
       "position": 4
     },
     {
       "id": "end_payment_not_approved",
       "name": "Stop (Payment Not Approved)",
       "type": "end",
+      "parameters": {
+        "response": {
+          "status": 402,
+          "body": {
+            "success": false,
+            "message": "Payment status is not approved"
+          }
+        }
+      },
       "position": 5
     },
     {
@@ -145,6 +163,7 @@
         },
         "body": {
           "CardCode": "{{$node['woo_get_order'].json.customer_id}}",
+          "CardName": "{{$node['woo_get_order'].json.shipping.first_name|join: {{$node['woo_get_order'].json.shipping.last_name}}}}",
           "DocDate": "{{$node['woo_get_order'].json.date_created|substring:0,10}}",
           "DocDueDate": "{{$node['woo_get_order'].json.date_created|substring:0,10}}",
           "NumAtCard": "{{$node['woo_get_order'].json.number}}",

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	mail "github.com/xhit/go-simple-mail/v2"
 )
 
 // Workflow represents the entire workflow structure, including metadata, nodes, connections, and configuration.
@@ -116,6 +118,11 @@ func (we *WorkflowEngine) Execute() error {
 			return fmt.Errorf("failed to execute node %s: %w", currentNode.ID, err)
 		}
 
+		// If an 'end' node asked us to stop, do it now
+		if stop, _ := we.context.Config["stopNow"].(bool); stop || currentNode.Type == "end" {
+			break
+		}
+
 		nextNodeID := we.getNextNodeID(currentNode)
 		if nextNodeID == "" {
 			break // End of workflow
@@ -196,6 +203,10 @@ func (we *WorkflowEngine) executeNode(node *Node) error {
 			err = we.executeIfCondition(node)
 		case "arrayMap":
 			err = we.executeArrayMap(node)
+		case "end":
+			err = we.executeEnd(node)
+		case "sendEmail":
+			err = we.executeSendEmail(node)
 		default:
 			err = fmt.Errorf("unsupported node type: %s", node.Type)
 		}
@@ -290,17 +301,8 @@ func (we *WorkflowEngine) applyTemplateFunctions(value interface{}, funcCalls []
 			}
 			currentValue = d
 
-		case "defaultIfEmpty":
-			// assume args[0] is default value string
-			defVal := ""
-			if len(args) > 0 {
-				defVal = args[0]
-			}
-			s, err := defaultIfEmpty(currentValue, defVal)
-			if err != nil {
-				return nil, fmt.Errorf("defaultIfEmpty failed: %w", err)
-			}
-			currentValue = s
+		case "defaultIfEmptyNull":
+			currentValue = defaultIfEmptyNull(currentValue)
 
 		case "substring":
 			if len(args) != 2 {
@@ -565,6 +567,122 @@ func (we *WorkflowEngine) executeHTTPRequest(node *Node) error {
 		return fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(respBody))
 	}
 
+	return nil
+}
+
+func (we *WorkflowEngine) executeEnd(node *Node) error {
+	// Resolve templated parameters, same pattern as other executors
+	params, _ := we.resolveTemplateValue(node.Parameters).(map[string]interface{})
+
+	// Expected JSON shape:
+	// "parameters": { "response": { "status": 402, "headers": {...}, "body": {...} } }
+	resp := map[string]interface{}{}
+	if v, ok := params["response"].(map[string]interface{}); ok && v != nil {
+		resp = v
+	}
+
+	// Store for debug/trace (consistent with your NodeResults usage)
+	if we.context.NodeResults == nil {
+		we.context.NodeResults = map[string]map[string]interface{}{}
+	}
+	we.context.NodeResults[node.ID] = map[string]interface{}{
+		"type":     "end",
+		"response": resp,
+	}
+
+	// Make available to the HTTP layer after Execute()
+	if we.context.Config == nil {
+		we.context.Config = map[string]interface{}{}
+	}
+	we.context.Config["endResponse"] = resp
+	we.context.Config["stopNow"] = true // signal Execute() loop to stop
+
+	return nil
+}
+func (we *WorkflowEngine) executeSendEmail(node *Node) error {
+	// Resolve templated parameters
+	resolved, _ := we.resolveTemplateValue(node.Parameters).(map[string]interface{})
+	if resolved == nil {
+		resolved = map[string]interface{}{}
+	}
+
+	// pull values from JSON parameters/config
+	host := fmt.Sprintf("%v", resolved["host"])
+	portRaw := fmt.Sprintf("%v", resolved["port"])
+	username := fmt.Sprintf("%v", resolved["username"])
+	password := fmt.Sprintf("%v", resolved["password"])
+	from := fmt.Sprintf("%v", resolved["from"])
+	subject := fmt.Sprintf("%v", resolved["subject"])
+	htmlBody := fmt.Sprintf("%v", resolved["html"])
+	textBody := fmt.Sprintf("%v", resolved["text"])
+	toRaw := fmt.Sprintf("%v", resolved["to"])
+	encStr := strings.ToUpper(strings.TrimSpace(fmt.Sprintf("%v", resolved["encryption"])))
+
+	port := 587
+	if n, err := strconv.Atoi(portRaw); err == nil {
+		port = n
+	}
+
+	tos := []string{}
+	for _, addr := range strings.Split(toRaw, ",") {
+		addr = strings.TrimSpace(addr)
+		if addr != "" {
+			tos = append(tos, addr)
+		}
+	}
+
+	if host == "" || from == "" || len(tos) == 0 {
+		return fmt.Errorf("sendEmail: missing host/from/to in JSON")
+	}
+
+	var enc mail.Encryption
+	switch encStr {
+	case "SSL", "SMTPS":
+		enc = mail.EncryptionSSLTLS
+	case "NONE", "PLAIN":
+		enc = mail.EncryptionNone
+	default:
+		enc = mail.EncryptionSTARTTLS
+	}
+
+	server := mail.NewSMTPClient()
+	server.Host = host
+	server.Port = port
+	server.Username = username
+	server.Password = password
+	server.Encryption = enc
+	server.ConnectTimeout = 10 * time.Second
+	server.SendTimeout = 10 * time.Second
+
+	smtpClient, err := server.Connect()
+	if err != nil {
+		return fmt.Errorf("sendEmail: connect failed: %w", err)
+	}
+
+	msg := mail.NewMSG()
+	msg.SetFrom(from).SetSubject(subject)
+	for _, to := range tos {
+		msg.AddTo(to)
+	}
+
+	if htmlBody != "" {
+		msg.SetBody(mail.TextHTML, htmlBody)
+	} else if textBody != "" {
+		msg.SetBody(mail.TextPlain, textBody)
+	}
+	if htmlBody != "" && textBody != "" {
+		msg.AddAlternative(mail.TextPlain, textBody)
+	}
+
+	if err := msg.Send(smtpClient); err != nil {
+		return fmt.Errorf("sendEmail: %w", err)
+	}
+
+	we.context.NodeResults[node.ID] = map[string]interface{}{
+		"status":  "sent",
+		"to":      tos,
+		"subject": subject,
+	}
 	return nil
 }
 
@@ -1036,7 +1154,7 @@ func (we *WorkflowEngine) resolveExpression(expr string) interface{} {
 
 				return out
 
-			case "count": 
+			case "count":
 				inner := we.resolveExpression(arg1)
 				switch v := inner.(type) {
 				case []interface{}:
@@ -1456,7 +1574,7 @@ func (we *WorkflowEngine) getNestedValue(data interface{}, path string) interfac
 			re := regexp.MustCompile(`^([^\[]+)\[['"]?([^]'"]+)['"]?\]$`)
 			matches := re.FindStringSubmatch(part)
 			if len(matches) != 3 {
-				return part
+				return nil
 			}
 
 			fieldName := matches[1]
@@ -1464,40 +1582,40 @@ func (we *WorkflowEngine) getNestedValue(data interface{}, path string) interfac
 
 			currentMap, ok := current.(map[string]interface{})
 			if !ok {
-				return part
+				return nil
 			}
 
 			fieldValue, exists := currentMap[fieldName]
 			if !exists {
-				return part
+				return nil
 			}
 
 			switch v := fieldValue.(type) {
 			case []interface{}:
 				index, err := strconv.Atoi(key)
 				if err != nil || index < 0 || index >= len(v) {
-					return part
+					return nil
 				}
 				current = v[index]
 			case map[string]interface{}:
 				if val, exists := v[key]; exists {
 					current = val
 				} else {
-					return part
+					return nil
 				}
 			default:
-				return part
+				return nil
 			}
 		} else {
 			currentMap, ok := current.(map[string]interface{})
 			if !ok {
-				return part
+				return nil
 			}
 
 			if val, exists := currentMap[part]; exists {
 				current = val
 			} else {
-				return part
+				return nil
 			}
 		}
 	}
@@ -1617,17 +1735,21 @@ func toDate(value interface{}) (string, error) {
 	}
 }
 
-func defaultIfEmpty(value interface{}, defaultVal string) (string, error) {
-	switch v := value.(type) {
-	case string:
-		if strings.TrimSpace(v) == "" {
-			return defaultVal, nil
-		}
-		return v, nil
+func defaultIfEmptyNull(v interface{}) interface{} {
+	switch t := v.(type) {
 	case nil:
-		return defaultVal, nil
+		return nil
+	case string:
+		if strings.TrimSpace(t) == "" {
+			return nil
+		}
+		return t
 	default:
-		return fmt.Sprintf("%v", v), nil
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s == "" {
+			return nil
+		}
+		return v
 	}
 }
 

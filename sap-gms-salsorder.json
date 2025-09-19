@@ -11,7 +11,9 @@
       "parameters": {
         "url": "{{config.sapInstanceUrl}}",
         "method": "POST",
-        "headers": { "Content-Type": "application/json" },
+        "headers": {
+          "Content-Type": "application/json"
+        },
         "body": {
           "CompanyDB": "{{config.sapCompanyDB}}",
           "UserName": "{{config.sapUserName}}",
@@ -51,7 +53,6 @@
       },
       "position": 3
     },
-    
     {
       "id": "decide_create_or_update",
       "name": "IF: Missing GMS orderNum (U_ReturnNo)?",
@@ -68,9 +69,7 @@
         }
       },
       "position": 4
-    }
-    ,
-
+    },
     {
       "id": "gms_create_post",
       "name": "GMS CREATE (POST, orderNum empty)",
@@ -93,6 +92,8 @@
                 "accountName": "{{$node['sap_get_order'].json.CardName}}",
                 "accountKey": "{{$node['sap_get_order'].json.CardCode}}",
                 "createdDate": "{{$node['sap_get_order'].json.DocDate|toDate}}",
+                "address": "{{$node['sap_get_order'].json.Address2}}",
+                "city": "{{$node['sap_get_order'].json.AddressExtension.ShipToCity | defaultIfEmptyNull }}",
                 "status": "New"
               }
             }
@@ -113,12 +114,11 @@
           "Cookie": "B1SESSION={{$node['sap_login'].json.SessionId}}"
         },
         "body": {
-         "U_ReturnNo": "{{$node['gms_create_post'].json.orderNum}}"
+          "U_ReturnNo": "{{$node['gms_create_post'].json.orderNum}}"
         }
       },
       "position": 6
     },
-
     {
       "id": "gms_update_post",
       "name": "GMS UPDATE (POST, orderNum present)",
@@ -150,7 +150,6 @@
       },
       "position": 7
     },
-
     {
       "id": "gms_post_canceled",
       "name": "GMS POST (header-only for canceled)",
@@ -182,7 +181,6 @@
       },
       "position": 8
     },
-
     {
       "id": "sap_logout",
       "name": "SAP B1 Logout",
@@ -199,28 +197,58 @@
     }
   ],
   "connections": [
-  { "from": "sap_login", "to": "sap_get_order" },
-  { "from": "sap_get_order", "to": "decide_cancelled" },
-
-  { "from": "decide_cancelled", "to": "decide_create_or_update", "branch": "true"},
-  { "from": "decide_cancelled", "to": "gms_post_canceled", "branch": "false" },
-
-  { "from": "gms_post_canceled", "to": "sap_logout" },
-
-  { "from": "decide_create_or_update", "to": "gms_create_post", "branch": "true" },
-  { "from": "gms_create_post", "to": "sap_update_orderNum" },
-  { "from": "sap_update_orderNum", "to": "sap_logout" },
-
-  { "from": "decide_create_or_update", "to": "gms_update_post", "branch": "false" },
-  { "from": "gms_update_post", "to": "sap_logout" }
-],
+    {
+      "from": "sap_login",
+      "to": "sap_get_order"
+    },
+    {
+      "from": "sap_get_order",
+      "to": "decide_cancelled"
+    },
+    {
+      "from": "decide_cancelled",
+      "to": "decide_create_or_update",
+      "branch": "true"
+    },
+    {
+      "from": "decide_cancelled",
+      "to": "gms_post_canceled",
+      "branch": "false"
+    },
+    {
+      "from": "gms_post_canceled",
+      "to": "sap_logout"
+    },
+    {
+      "from": "decide_create_or_update",
+      "to": "gms_create_post",
+      "branch": "true"
+    },
+    {
+      "from": "gms_create_post",
+      "to": "sap_update_orderNum"
+    },
+    {
+      "from": "sap_update_orderNum",
+      "to": "sap_logout"
+    },
+    {
+      "from": "decide_create_or_update",
+      "to": "gms_update_post",
+      "branch": "false"
+    },
+    {
+      "from": "gms_update_post",
+      "to": "sap_logout"
+    }
+  ],
   "config": {
     "sapInstanceUrl": "http://localhost:50002/b1s/v1/Login",
     "sapBaseUrl": "http://localhost:50002/b1s/v1",
     "sapCompanyDB": "SBODEOIL4",
     "sapUserName": "Brijesh",
     "sapPassword": "1234",
-    "docEntry": 772,
+    "docEntry": 783,
     "gmsBaseUrl": "http://199.203.140.245:44380/OrderPipeMidgeSapAPI"
   }
 }

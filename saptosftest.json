@@ -1,0 +1,332 @@
+{
+  "workflow": {
+    "name": "SAP to Salesforce Integration",
+    "description": "Sync SAP Business Partner updates to Salesforce Account"
+  },
+  "nodes": [
+    {
+      "id": "sf_access_token_fetch",
+      "name": "Fetch Salesforce Access Token",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/oauth2/token?grant_type=password&client_id=3MVG9395hRoMgFO1MelEIT9Qwm2YK.UQcNyrHIkZg9oAvQiCelatcQUUVJwdQxb7jr1MqCS2g_6R78XhFl.gm&client_secret=5AEB0358C228FBFA93CE2D763C7C8CDF92FB6F5C609936A8E53B2E8C624D06B0&username=yaniv-lnjy@force.com.integratio&password=Aa123456!!QuIOQzGdVXPiGBetDi7PyNid",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      "position": 1,
+      "retry": {
+        "enabled": true,
+        "maxAttempts": 3,
+        "delay": 1000
+      }
+    },
+    {
+      "id": "sap_login",
+      "name": "SAP B1 Login",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapInstanceUrl}}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "CompanyDB": "{{config.sapCompanyDB}}",
+          "UserName": "{{config.sapUserName}}",
+          "Password": "{{config.sapPassword}}"
+        }
+      },
+      "position": 2
+    },
+    {
+      "id": "sap_fetch_bp",
+      "name": "Fetch SAP Business Partner",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/BusinessPartners('{{config.resourceId}}')",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 3
+    },
+    {
+      "id": "sf_check_group",
+      "name": "Check SF Classification Group Exists",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v56.0/query/?q=SELECT+id+from+Classification_Group__c+WHERE+Name='Testsap-11'",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 4
+    },
+    {
+      "id": "group_exists_check",
+      "name": "Classification Group Exists",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$node['sf_check_group'].totalSize | toFixed:0}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 5
+    },
+    {
+      "id": "sf_create_group",
+      "name": "Create SF Classification Group",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v58.0/sobjects/Classification_Group__c",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "Name": "Testsap-11"
+        }
+      },
+      "position": 6
+    },
+    {
+      "id": "sf_check_account",
+      "name": "Check Salesforce Account Exists",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/query?q=SELECT+Id+FROM+Account+WHERE+SAP_Account_Number__c='{{$node['sap_fetch_bp'].CardCode}}'",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        }
+      },
+      "position": 7
+    },
+    {
+      "id": "account_exists_check",
+      "name": "Account Exists?",
+      "type": "if",
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "{{$node['sf_check_account'].totalSize | toFixed:0}}",
+              "operation": "greater",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "position": 8
+    },
+    {
+      "id": "sf_update_account",
+      "name": "Update Salesforce Account",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "https://telran--integratio.sandbox.my.salesforce.com/services/data/v64.0/sobjects/Account/SAP_Account_Number__c/{{$node['sap_fetch_bp'].CardCode}}",
+        "method": "PATCH",
+        "headers": {
+          "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "FirstName": "{{$node['sap_fetch_bp'].CardName | truncate:40}}",
+          "LastName": "{{$node['sap_fetch_bp'].CardName | truncate:40}}",
+"Account_Classification_Group__c": "{{$coalesce($node['sf_check_group'].records[0].Id,$node['sf_create_group'].id)}}",
+          "Accounting_email__c": "{{$node['sap_fetch_bp'].EmailAddress}}",
+          "Phone1__c": "{{$node['sap_fetch_bp'].Phone1}}",
+          "Phone2__c": "{{$node['sap_fetch_bp'].Phone2}}",
+          "Mobile2__c": "{{$node['sap_fetch_bp'].Cellular}}",
+          "Website": "{{$node['sap_fetch_bp'].Website}}",
+          "Industry": "{{$node['sap_fetch_bp'].Industry}}",
+          "ShippingStreet": "{{$node['sap_fetch_bp'].AddressName}}",
+          "ShippingCity": "{{$node['sap_fetch_bp'].MailAddress}}",
+          "ShippingState": "{{$node['sap_fetch_bp'].MailState}}",
+          "ShippingPostalCode": "{{$node['sap_fetch_bp'].ZipCode}}",
+          "ShippingCountry": "{{$node['sap_fetch_bp'].MailCountry}}",
+          "BillingStreet": "{{$node['sap_fetch_bp'].Address}}",
+          "BillingCity": "{{$node['sap_fetch_bp'].MailCity}}",
+          "BillingState": "{{$node['sap_fetch_bp'].MailCounty}}",
+          "BillingPostalCode": "{{$node['sap_fetch_bp'].MailZipCode}}",
+          "BillingCountry": "{{$node['sap_fetch_bp'].MailCountry}}",
+          "BillingLatitude": null,
+          "BillingLongitude": null,
+          "Customer_Type__c": "{{$node['sap_fetch_bp'].U_Customer_Type}}",
+          "ID_Number__c": "{{$node['sap_fetch_bp'].OwnerIDNumber}}",
+          "Created_in_SAP_on__c": "{{$node['sap_fetch_bp'].CreateDate}}",
+          "Valid_To__c": "{{$node['sap_fetch_bp'].ValidTo}}",
+          "Credit_Card_Type__c": "",
+          "Credit_Card_Number__c": "",
+          "Shipping_Certificate__c": "",
+          "Expiration_Date__c": "{{$node['sap_fetch_bp'].ExpirationDate | defaultIfEmpty: null}}",
+          "Serial_Number__c": "{{$node['sap_fetch_bp'].SerialNumber}}",
+          "Owner_ID__c": "{{$node['sap_fetch_bp'].OwnerCode}}",
+          "AccountSource": "{{$node['sap_fetch_bp'].FatherType}}",
+          "Salesperson__c": "{{$node['sap_fetch_bp'].SalesPersonCode}}",
+          "Comments__c": "{{$node['sap_fetch_bp'].Comments}}",
+          "Sync_to_SAP__c": "true",
+          "PersonMailingCity": "{{$node['sap_fetch_bp'].BillToCity}}",
+          "PersonMailingCountry": "{{$node['sap_fetch_bp'].BillToCountry | countryToAlpha3}}",
+          "PersonMailingPostalCode": "{{$node['sap_fetch_bp'].BillToZip}}",
+          "PersonMailingState": "{{$node['sap_fetch_bp'].BillToState}}",
+          "PersonMailingStreet": "{{$node['sap_fetch_bp'].BillToStreet}}"
+        }
+      },
+      "position": 9
+    },
+    {
+      "id": "sf_create_account",
+      "name": "Create Salesforce Account",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sfInstanceUrl}}/services/data/v64.0/sobjects/Account",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer {{$node['sf_access_token_fetch'].access_token}}",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "FirstName": "{{$node['sap_fetch_bp'].CardName | truncate:40}}",
+          "LastName": "{{$node['sap_fetch_bp'].CardName | truncate:40}}",
+          "SAP_Account_Number__c": "{{$node['sap_fetch_bp'].CardCode}}",
+          "Accounting_email__c": "{{$node['sap_fetch_bp'].EmailAddress}}",
+          "Phone1__c": "{{$node['sap_fetch_bp'].Phone1}}",
+          "Phone2__c": "{{$node['sap_fetch_bp'].Phone2}}",
+          "Mobile2__c": "{{$node['sap_fetch_bp'].Cellular}}",
+          "Website": "{{$node['sap_fetch_bp'].Website}}",
+          "Industry": "{{$node['sap_fetch_bp'].Industry}}",
+          "ShippingStreet": "{{$node['sap_fetch_bp'].AddressName}}",
+          "ShippingCity": "{{$node['sap_fetch_bp'].MailAddress}}",
+          "ShippingState": "{{$node['sap_fetch_bp'].MailState}}",
+          "ShippingPostalCode": "{{$node['sap_fetch_bp'].ZipCode}}",
+          "ShippingCountry": "{{$node['sap_fetch_bp'].MailCountry}}",
+          "BillingStreet": "{{$node['sap_fetch_bp'].Address}}",
+          "BillingCity": "{{$node['sap_fetch_bp'].MailCity}}",
+          "BillingState": "{{$node['sap_fetch_bp'].MailCounty}}",
+          "BillingPostalCode": "{{$node['sap_fetch_bp'].MailZipCode}}",
+          "BillingCountry": "{{$node['sap_fetch_bp'].MailCountry}}",
+          "BillingLatitude": null,
+          "BillingLongitude": null,
+          "Customer_Type__c": "{{$node['sap_fetch_bp'].U_Customer_Type}}",
+          "ID_Number__c": "{{$node['sap_fetch_bp'].OwnerIDNumber}}",
+          "Created_in_SAP_on__c": "{{$node['sap_fetch_bp'].CreateDate}}",
+          "Valid_To__c": "{{$node['sap_fetch_bp'].ValidTo}}",
+          "Shipping_Certificate__c": "{{$node['sap_fetch_bp'].ShipToDefault}}",
+          "Expiration_Date__c": "{{$node['sap_fetch_bp'].ExpirationDate | defaultIfEmpty: null}}",
+          "Serial_Number__c": "{{$node['sap_fetch_bp'].SerialNumber}}",
+          "Owner_ID__c": "{{$node['sap_fetch_bp'].OwnerCode}}",
+          "AccountSource": "{{$node['sap_fetch_bp'].FatherType}}",
+          "Salesperson__c": "{{$node['sap_fetch_bp'].SalesPersonCode}}",
+          "Comments__c": "{{$node['sap_fetch_bp'].Comments}}",
+          "Sync_to_SAP__c": "true",
+          "PersonMailingCity": "{{$node['sap_fetch_bp'].BillToCity}}",
+          "PersonMailingCountry": "{{$node['sap_fetch_bp'].BillToCountry | countryToAlpha3}}",
+          "PersonMailingPostalCode": "{{$node['sap_fetch_bp'].BillToZip}}",
+          "PersonMailingState": "{{$node['sap_fetch_bp'].BillToState}}",
+          "PersonMailingStreet": "{{$node['sap_fetch_bp'].BillToStreet}}",
+          "RecordTypeId": "0128d000000YzEKAA0",
+          "Account_Classification_Group__c": "{{$coalesce($node['sf_check_group'].records[0].Id,$node['sf_create_group'].id)}}"
+        }
+      },
+      "position": 10
+    },
+    {
+      "id": "sap_logout",
+      "name": "SAP B1 Logout",
+      "type": "httpRequest",
+      "parameters": {
+        "url": "{{config.sapBaseUrl}}/Logout",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json",
+          "Cookie": "B1SESSION={{$node['sap_login'].SessionId}}"
+        }
+      },
+      "position": 11
+    }
+  ],
+  "connections": [
+    {
+      "from": "sf_access_token_fetch",
+      "to": "sap_login"
+    },
+    {
+      "from": "sap_login",
+      "to": "sap_fetch_bp"
+    },
+{
+      "from": "sap_fetch_bp",
+      "to": "sf_check_group"
+    },
+{
+      "from": "sf_check_group",
+      "to": "group_exists_check"
+    },
+    {
+      "from": "group_exists_check",
+      "to": "sf_check_account",
+      "branch": "true"
+    },
+    {
+      "from": "group_exists_check",
+      "to": "sf_create_group",
+      "branch": "false"
+    },
+    {
+      "from": "sf_create_group",
+      "to": "sf_check_account"
+    },
+    {
+      "from": "sf_check_account",
+      "to": "account_exists_check"
+    },
+    {
+      "from": "account_exists_check",
+      "to": "sf_update_account",
+      "branch": "true"
+    },
+    {
+      "from": "account_exists_check",
+      "to": "sf_create_account",
+      "branch": "false"
+    },
+    {
+      "from": "sf_update_account",
+      "to": "sap_logout"
+    },
+    {
+      "from": "sf_create_account",
+      "to": "sap_logout"
+    }
+    
+    
+  ],
+  "config": {
+   "sapInstanceUrl": "http://192.168.0.200:50001/b1s/v1/Login",
+    "sapBaseUrl": "http://192.168.0.200:50001/b1s/v1",
+    "sapCompanyDB": "SBODEOIL4",
+    "sapUserName": "Brijesh",
+    "sapPassword": "1234",
+    "sfInstanceUrl": "https://telran--integratio.sandbox.my.salesforce.com",
+    "sfClientId": "3MVG9395hRoMgFO1MelEIT9Qwm2YK.UQcNyrHIkZg9oAvQiCelatcQUUVJwdQxb7jr1MqCS2g_6R78XhFl.gm",
+    "sfClientSecret": "5AEB0358C228FBFA93CE2D763C7C8CDF92FB6F5C609936A8E53B2E8C624D06B0",
+    "sfUsername": "yaniv-lnjy@force.com.integratio",
+    "sfPassword": "Aa123456!!QuIOQzGdVXPiGBetDi7PyNid",
+    "sfGrantType": "password"
+  }
+}
